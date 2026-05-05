@@ -1,0 +1,25 @@
+# build/
+build/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Compiled
+*.exe
+*.dll
+*.lib
+*.obj
+*.o
+*.a
+
+# vcpkg
+vcpkg_installed/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json

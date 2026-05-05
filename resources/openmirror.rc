@@ -1,0 +1,8 @@
+// Windows resource file
+#include <windows.h>
+
+// App icon (ID 101)
+101 ICON "openmirror.ico"
+
+// DPI awareness manifest
+1 RT_MANIFEST "openmirror.manifest"
