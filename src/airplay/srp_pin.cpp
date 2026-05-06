@@ -197,15 +197,18 @@ std::vector<uint8_t> SrpPinServer::get_B() const {
 
 bool SrpPinServer::process_client_pubkey(const std::vector<uint8_t>& A,
                                          const std::vector<uint8_t>& M1) {
+    std::cerr << "[SRP] step2 enter A=" << A.size() << " M1=" << M1.size()
+              << " ready=" << impl_->ready << std::endl;
     if (!impl_->ready || A.size() != kModBytes || M1.size() != kHashBytes)
         return false;
 
     if (!BN_bin2bn(A.data(), (int)A.size(), impl_->A)) return false;
+    std::cerr << "[SRP] A loaded (BN bytes=" << BN_num_bytes(impl_->A) << ")" << std::endl;
 
     // Reject A ≡ 0 (mod N).
     BIGNUM* tmp = BN_new();
     BN_mod(tmp, impl_->A, impl_->N, impl_->ctx);
-    if (BN_is_zero(tmp)) { BN_free(tmp); return false; }
+    if (BN_is_zero(tmp)) { BN_free(tmp); std::cerr << "[SRP] A==0\n"; return false; }
     BN_free(tmp);
 
     // u = SHA1(PAD(A) | PAD(B))
@@ -215,6 +218,7 @@ bool SrpPinServer::process_client_pubkey(const std::vector<uint8_t>& A,
     auto uh = sha1(ub);
     BIGNUM* u = BN_new();
     if (!BN_bin2bn(uh.data(), (int)uh.size(), u)) { BN_free(u); return false; }
+    std::cerr << "[SRP] u computed" << std::endl;
 
     // S = (A * v^u)^b mod N
     BIGNUM* vu = BN_new();
@@ -224,20 +228,24 @@ bool SrpPinServer::process_client_pubkey(const std::vector<uint8_t>& A,
               BN_mod_mul(avu, impl_->A, vu, impl_->N, impl_->ctx) &&
               BN_mod_exp(S, avu, impl_->b, impl_->N, impl_->ctx);
     BN_free(vu); BN_free(avu); BN_free(u);
-    if (!ok) { BN_free(S); return false; }
+    if (!ok) { BN_free(S); std::cerr << "[SRP] mod_exp failed\n"; return false; }
+    std::cerr << "[SRP] S computed (BN bytes=" << BN_num_bytes(S) << ")" << std::endl;
 
     auto S_bytes = bn_to_padded(S);
     BN_free(S);
+    std::cerr << "[SRP] S padded to " << S_bytes.size() << "B" << std::endl;
 
     // K = SHA1_INTERLEAVE(S)
     impl_->K = sha1_interleave(S_bytes);
+    std::cerr << "[SRP] K=" << impl_->K.size() << "B" << std::endl;
 
     // M1' = SHA1( SHA1(N) XOR SHA1(g) | SHA1(I) | s | A | B | K )
     auto hN = sha1(bn_to_padded(impl_->N));
     std::vector<uint8_t> g_padded(kModBytes, 0);
     {
         int gn = BN_num_bytes(impl_->g);
-        BN_bn2bin(impl_->g, g_padded.data() + (kModBytes - gn));
+        if (gn > 0 && gn <= kModBytes)
+            BN_bn2bin(impl_->g, g_padded.data() + (kModBytes - gn));
     }
     auto hg = sha1(g_padded);
     std::vector<uint8_t> hNg(kHashBytes);
@@ -249,14 +257,16 @@ bool SrpPinServer::process_client_pubkey(const std::vector<uint8_t>& A,
     std::vector<uint8_t> m1_buf;
     m1_buf.insert(m1_buf.end(), hNg.begin(), hNg.end());
     m1_buf.insert(m1_buf.end(), hI.begin(), hI.end());
-    m1_buf.insert(m1_buf.end(), get_salt().begin(), get_salt().end());
+    auto salt_v = get_salt();
+    m1_buf.insert(m1_buf.end(), salt_v.begin(), salt_v.end());
     append_pad(m1_buf, impl_->A);
     append_pad(m1_buf, impl_->B);
     m1_buf.insert(m1_buf.end(), impl_->K.begin(), impl_->K.end());
     auto M1_calc = sha1(m1_buf);
+    std::cerr << "[SRP] M1_calc computed (m1_buf=" << m1_buf.size() << "B)" << std::endl;
 
     if (CRYPTO_memcmp(M1_calc.data(), M1.data(), kHashBytes) != 0) {
-        std::cerr << "[SRP] Client M1 proof mismatch (wrong PIN?)\n";
+        std::cerr << "[SRP] Client M1 proof mismatch (wrong PIN?)" << std::endl;
         return false;
     }
 
@@ -268,6 +278,7 @@ bool SrpPinServer::process_client_pubkey(const std::vector<uint8_t>& A,
     impl_->M2 = sha1(m2_buf);
 
     authenticated_ = true;
+    std::cerr << "[SRP] authenticated, M2=" << impl_->M2.size() << "B" << std::endl;
     return true;
 }
 
