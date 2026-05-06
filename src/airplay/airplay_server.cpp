@@ -419,8 +419,33 @@ network::RtspResponse AirPlayServer::handle_pair_setup_pin(const network::RtspRe
     if (!r.parse(req.body.data(), req.body.size())) {
         std::cerr << "[AirPlay] pair-setup-pin: body is not a binary plist ("
                   << req.body.size() << " bytes)\n";
+        // Hex-dump the first 256 bytes so we can see what iOS sent.
+        std::cerr << "[AirPlay] body hex:";
+        size_t n = std::min<size_t>(256, req.body.size());
+        for (size_t i = 0; i < n; i++) {
+            char hb[4]; std::snprintf(hb, 4, "%02x", req.body[i]);
+            std::cerr << (i % 32 == 0 ? "\n  " : " ") << hb;
+        }
+        std::cerr << std::endl;
         resp.status_code = 400;
         return resp;
+    }
+    // List well-known keys we recognize, plus a hex dump of the body so we
+    // can confirm exactly what iOS sent.
+    {
+        const char* probe[] = {"method","user","pk","proof","epk","authTag",
+                               "publicKey","clientPublicKey","sessionID",
+                               "salt","password","pin","state"};
+        std::cerr << "[AirPlay] pair-setup-pin keys:";
+        for (auto k : probe) if (r.has_key(k)) std::cerr << " " << k;
+        std::cerr << "  (body=" << req.body.size() << "B)" << std::endl;
+        std::cerr << "[AirPlay] body hex:";
+        size_t n = std::min<size_t>(96, req.body.size());
+        for (size_t i = 0; i < n; i++) {
+            char hb[4]; std::snprintf(hb, 4, "%02x", req.body[i]);
+            std::cerr << (i % 32 == 0 ? "\n  " : " ") << hb;
+        }
+        std::cerr << std::endl;
     }
 
     // Serialize the entire SRP/PIN state machine — RTSP runs each client on
@@ -441,10 +466,10 @@ network::RtspResponse AirPlayServer::handle_pair_setup_pin(const network::RtspRe
             return resp;
         }
 
-        // Per AirPlay 1 PIN spec, the SRP username "I" is the per-pairing
-        // identifier iOS sends in the "user" field (e.g. device MAC string),
-        // NOT the literal "Pair-Setup". Using the wrong I causes M1 mismatch.
-        if (!srp_pin_.start(current_pin_, user)) {
+        // SRP username "I" is hardcoded to "Pair-Setup" per AirPlay 1 spec
+        // (matches shairport-sync / RPiPlay). The "user" bplist field is
+        // device metadata (MAC/UUID), NOT the SRP I.
+        if (!srp_pin_.start(current_pin_)) {
             std::cerr << "[AirPlay] SRP start failed\n";
             resp.status_code = 500;
             return resp;
