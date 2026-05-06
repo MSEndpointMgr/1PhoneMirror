@@ -423,6 +423,10 @@ network::RtspResponse AirPlayServer::handle_pair_setup_pin(const network::RtspRe
         return resp;
     }
 
+    // Serialize the entire SRP/PIN state machine — RTSP runs each client on
+    // its own thread, and srp_pin_ holds non-thread-safe BIGNUM state.
+    std::lock_guard<std::mutex> lk(pin_mutex_);
+
     // ----- Step 1: client requests SRP parameters -----
     if (r.has_key("method") && r.has_key("user")) {
         std::string method, user;
@@ -431,18 +435,13 @@ network::RtspResponse AirPlayServer::handle_pair_setup_pin(const network::RtspRe
         std::cout << "[AirPlay] pair-setup-pin step 1 — method=" << method
                   << " user=" << user << "\n";
 
-        std::string pin;
-        {
-            std::lock_guard<std::mutex> lk(pin_mutex_);
-            pin = current_pin_;
-        }
-        if (pin.empty()) {
+        if (current_pin_.empty()) {
             std::cerr << "[AirPlay] pair-setup-pin: no active PIN — call /pair-pin-start first\n";
             resp.status_code = 400;
             return resp;
         }
 
-        if (!srp_pin_.start(pin)) {
+        if (!srp_pin_.start(current_pin_)) {
             std::cerr << "[AirPlay] SRP start failed\n";
             resp.status_code = 500;
             return resp;
@@ -475,6 +474,12 @@ network::RtspResponse AirPlayServer::handle_pair_setup_pin(const network::RtspRe
         r.get_data("proof", M1);
         std::cout << "[AirPlay] pair-setup-pin step 2 — A(" << A.size()
                   << ") M1(" << M1.size() << ")\n";
+        if (A.size() != 256 || M1.size() != 20) {
+            std::cerr << "[AirPlay] pair-setup-pin step 2: invalid sizes — abort\n";
+            srp_active_ = false;
+            resp.status_code = 400;
+            return resp;
+        }
 
         if (!srp_pin_.process_client_pubkey(A, M1)) {
             std::cerr << "[AirPlay] SRP M1 verification failed (wrong PIN)\n";
@@ -538,10 +543,7 @@ network::RtspResponse AirPlayServer::handle_pair_setup_pin(const network::RtspRe
 
         // Pairing complete — clear PIN from screen.
         if (on_pin_display_) on_pin_display_("");
-        {
-            std::lock_guard<std::mutex> lk(pin_mutex_);
-            current_pin_.clear();
-        }
+        current_pin_.clear();
         srp_active_ = false;
 
         std::cout << "[AirPlay] PIN pairing complete — sent encrypted server LTPK\n";

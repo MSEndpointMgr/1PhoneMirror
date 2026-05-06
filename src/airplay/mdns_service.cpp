@@ -495,7 +495,11 @@ bool MdnsService::register_airplay(const std::string& server_name, uint16_t port
         auto airplay_txt = build_txt_payload({
             {"deviceid", device_id},
             {"features", "0x5A7FFEE6"},
-            {"flags", require_pin ? "0x44" : "0x4"},
+            // PIN-required pairing: flags bit 0x8 = "PIN required" (no plaintext
+            // password). When require_pin is false we just advertise as AirPlay
+            // capable. We deliberately keep pw=false in PIN mode so iOS shows the
+            // "Enter the onscreen code" prompt instead of the password prompt.
+            {"flags", require_pin ? "0x8" : "0x4"},
             {"model", "AppleTV3,2"},
             {"pi", "2e388006-13ba-4041-9a67-25dd4a43d536"},
             {"pk", "b07727d6f6cd6e08b58ede525ec3cdeaa252ad9f683feb212ef8a205246554e7"},
@@ -520,8 +524,8 @@ bool MdnsService::register_airplay(const std::string& server_name, uint16_t port
                 {"am", "AppleTV3,2"}, {"ch", "2"}, {"cn", "0,1,2,3"}, {"da", "true"},
                 {"et", "0,3,5"}, {"ft", "0x5A7FFEE6"}, {"md", "0,1,2"},
                 {"pk", "b07727d6f6cd6e08b58ede525ec3cdeaa252ad9f683feb212ef8a205246554e7"},
-                {"pw", require_pin ? "true" : "false"}, {"rhd", "5.6.0.0"},
-                {"sf", require_pin ? "0x44" : "0x4"},
+                {"pw", "false"}, {"rhd", "5.6.0.0"},
+                {"sf", require_pin ? "0x8" : "0x4"},
                 {"sr", "44100"}, {"ss", "16"}, {"sv", "false"}, {"tp", "UDP"},
                 {"txtvers", "1"}, {"vn", "65537"}, {"vs", "220.68"}, {"vv", "2"},
             });
@@ -569,7 +573,7 @@ bool MdnsService::register_airplay(const std::string& server_name, uint16_t port
     impl_->airplay_txt = build_txt_payload({
         {"deviceid", device_id},
         {"features", "0x5A7FFEE6"},
-        {"flags", require_pin ? "0x44" : "0x4"},
+        {"flags", require_pin ? "0x8" : "0x4"},
         {"model", "AppleTV3,2"},
         {"pi", "2e388006-13ba-4041-9a67-25dd4a43d536"},
         {"pk", "b07727d6f6cd6e08b58ede525ec3cdeaa252ad9f683feb212ef8a205246554e7"},
@@ -581,8 +585,8 @@ bool MdnsService::register_airplay(const std::string& server_name, uint16_t port
         {"am", "AppleTV3,2"}, {"ch", "2"}, {"cn", "0,1,2,3"}, {"da", "true"},
         {"et", "0,3,5"}, {"ft", "0x5A7FFEE6"}, {"md", "0,1,2"},
         {"pk", "b07727d6f6cd6e08b58ede525ec3cdeaa252ad9f683feb212ef8a205246554e7"},
-        {"pw", require_pin ? "true" : "false"}, {"rhd", "5.6.0.0"},
-        {"sf", require_pin ? "0x44" : "0x4"},
+        {"pw", "false"}, {"rhd", "5.6.0.0"},
+        {"sf", require_pin ? "0x8" : "0x4"},
         {"sr", "44100"}, {"ss", "16"}, {"sv", "false"}, {"tp", "UDP"},
         {"txtvers", "1"}, {"vn", "65537"}, {"vs", "220.68"}, {"vv", "2"},
     });
