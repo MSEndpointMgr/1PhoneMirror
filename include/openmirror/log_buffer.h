@@ -42,11 +42,11 @@ public:
     // Install as capture on std::cout and std::cerr
     void install() {
         original_buf_ = std::cout.rdbuf();
-        tee_buf_ = std::make_unique<TeeBuf>(this);
+        tee_buf_ = std::make_unique<TeeBuf>(this, original_buf_);
         std::cout.rdbuf(tee_buf_.get());
 
         original_cerr_buf_ = std::cerr.rdbuf();
-        cerr_tee_buf_ = std::make_unique<TeeBuf>(this);
+        cerr_tee_buf_ = std::make_unique<TeeBuf>(this, original_cerr_buf_);
         std::cerr.rdbuf(cerr_tee_buf_.get());
     }
 
@@ -69,10 +69,11 @@ private:
 
     class TeeBuf : public std::streambuf {
     public:
-        TeeBuf(LogBuffer* log) : log_(log) {}
+        TeeBuf(LogBuffer* log, std::streambuf* orig = nullptr) : log_(log), orig_(orig) {}
 
     protected:
         int overflow(int c) override {
+            if (orig_) orig_->sputc(static_cast<char>(c));
             std::lock_guard<std::mutex> lock(buf_mutex_);
             auto tid = std::this_thread::get_id();
             auto& buf = thread_bufs_[tid];
@@ -86,6 +87,7 @@ private:
         }
 
         std::streamsize xsputn(const char* s, std::streamsize n) override {
+            if (orig_) orig_->sputn(s, n);
             std::lock_guard<std::mutex> lock(buf_mutex_);
             auto tid = std::this_thread::get_id();
             auto& buf = thread_bufs_[tid];
@@ -105,6 +107,7 @@ private:
 
     private:
         LogBuffer* log_;
+        std::streambuf* orig_;
         std::mutex buf_mutex_;
         std::map<std::thread::id, std::string> thread_bufs_;
     };

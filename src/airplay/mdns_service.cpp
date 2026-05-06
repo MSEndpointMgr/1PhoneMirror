@@ -122,16 +122,26 @@ static uint32_t get_local_ipv4() {
             nullptr, addrs, &buf_len);
     }
     if (ret != NO_ERROR) return 0;
+
+    uint32_t fallback = 0;
     for (auto* a = addrs; a; a = a->Next) {
         if (a->OperStatus != IfOperStatusUp) continue;
         if (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
         for (auto* ua = a->FirstUnicastAddress; ua; ua = ua->Next) {
             auto* sa = reinterpret_cast<sockaddr_in*>(ua->Address.lpSockaddr);
-            if (sa->sin_family == AF_INET)
-                return ntohl(sa->sin_addr.s_addr);
+            if (sa->sin_family == AF_INET) {
+                uint32_t ip = ntohl(sa->sin_addr.s_addr);
+                // Skip link-local (169.254.x.x)
+                if ((ip >> 16) == 0xA9FE) continue;
+                // Skip loopback range
+                if ((ip >> 24) == 127) continue;
+                // Prefer interfaces with a default gateway
+                if (a->FirstGatewayAddress != nullptr) return ip;
+                if (fallback == 0) fallback = ip;
+            }
         }
     }
-    return 0;
+    return fallback;
 #else
     struct ifaddrs* ifa_list = nullptr;
     if (getifaddrs(&ifa_list) != 0) return 0;
@@ -601,7 +611,7 @@ bool MdnsService::register_airplay(const std::string& server_name, uint16_t port
 
     ip_mreq mreq{};
     inet_pton(AF_INET, MDNS_ADDR, &mreq.imr_multiaddr);
-    mreq.imr_interface.s_addr = INADDR_ANY;
+    mreq.imr_interface.s_addr = htonl(impl_->local_ip);
     if (setsockopt(impl_->sock, IPPROTO_IP, IP_ADD_MEMBERSHIP,
                    reinterpret_cast<const char*>(&mreq), sizeof(mreq)) != 0) {
         std::cerr << "[mDNS] Failed to join multicast group\n";
@@ -614,6 +624,11 @@ bool MdnsService::register_airplay(const std::string& server_name, uint16_t port
     int loop = 1;
     setsockopt(impl_->sock, IPPROTO_IP, IP_MULTICAST_LOOP,
                reinterpret_cast<const char*>(&loop), sizeof(loop));
+    // Send multicast on the correct interface
+    in_addr mc_if{};
+    mc_if.s_addr = htonl(impl_->local_ip);
+    setsockopt(impl_->sock, IPPROTO_IP, IP_MULTICAST_IF,
+               reinterpret_cast<const char*>(&mc_if), sizeof(mc_if));
 
     impl_->running.store(true);
     impl_->listener = std::thread(&Impl::listen_loop, impl_);

@@ -7,7 +7,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # --- Options ---
 option(ENABLE_AIRPLAY "Build AirPlay receiver module" ON)
-option(ENABLE_MIRACAST "Build Miracast receiver module (Windows only)" OFF)
+option(ENABLE_MIRACAST "Build Miracast receiver module (Windows only)" ON)
 option(ENABLE_CAST "Build Google Cast receiver module" ON)
 
 # --- Dependencies via vcpkg or find_package ---
@@ -112,11 +112,10 @@ endif()
 
 if(ENABLE_MIRACAST AND WIN32)
     target_compile_definitions(1PhoneMirror PRIVATE ENABLE_MIRACAST=1)
+    # Only needs WinRT for WiFi Direct (no D3D11/DXGI — uses FFmpeg for decode)
     target_link_libraries(1PhoneMirror PRIVATE
         windowsapp.lib
         RuntimeObject.lib
-        d3d11.lib
-        dxgi.lib
     )
 endif()
 
@@ -130,7 +129,7 @@ if(WIN32)
     target_compile_definitions(1PhoneMirror PRIVATE NOMINMAX)
     # Embed app manifest for DPI awareness (disable auto-generated manifest to avoid duplicate)
     target_sources(1PhoneMirror PRIVATE resources/openmirror.rc)
-    set_target_properties(1PhoneMirror PROPERTIES LINK_FLAGS "/MANIFEST:NO /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")
+    set_target_properties(1PhoneMirror PROPERTIES LINK_FLAGS "/MANIFEST:NO /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup")
 endif()
 
 # --- Install ---
