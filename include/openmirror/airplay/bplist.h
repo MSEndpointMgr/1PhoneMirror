@@ -15,6 +15,7 @@ public:
     // Query the root dict
     bool get_uint(const std::string& key, uint64_t& out) const;
     bool get_data(const std::string& key, std::vector<uint8_t>& out) const;
+    bool get_string(const std::string& key, std::string& out) const;
     bool has_key(const std::string& key) const;
 
     struct StreamInfo {

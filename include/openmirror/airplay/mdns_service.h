@@ -24,8 +24,11 @@ public:
     // server_name: display name shown on iOS devices
     // port: TCP port the AirPlay server is listening on
     // hw_addr: 6-byte MAC address (used as device ID)
+    // require_pin: advertise password-required (pw=true, flags=0x44)
+    //              so iOS prompts for an on-screen PIN.
     bool register_airplay(const std::string& server_name, uint16_t port,
-                          const uint8_t hw_addr[6]);
+                          const uint8_t hw_addr[6],
+                          bool require_pin = false);
 
     void unregister();
 

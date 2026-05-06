@@ -5,20 +5,25 @@
 #include <openmirror/media/decoder.h>
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <string>
 #include <thread>
 
 namespace openmirror::miracast {
 
-// Miracast receiver using the Windows.Media.Miracast WinRT API
-// This is the simplest way to receive Miracast (Wi-Fi Display) on Windows.
+// Miracast receiver using WiFi Direct + WFD (Wi-Fi Display) protocol.
 //
-// Android devices use Wi-Fi Direct + Miracast for native screen casting.
-// The WinRT MiracastReceiver API handles:
-// - Wi-Fi Direct P2P discovery and connection
-// - WFD capability negotiation (RTSP)
-// - MPEG2-TS + H.264 stream reception
-// - HDCP (optional)
+// Minimal OS requirements:
+// - Windows 10 (any version) with a WiFi Direct capable adapter
+// - Does NOT require "Projecting to this PC" to be enabled
+// - Does NOT require the "Wireless Display" optional feature
+//
+// Implementation:
+// - WiFiDirectAdvertisementPublisher advertises as a WFD sink
+// - WiFiDirectConnectionListener accepts P2P connections
+// - WFD RTSP session (M1-M7) negotiates capabilities
+// - MPEG2-TS stream received over RTP/TCP
+// - FFmpeg decodes H.264 video and AAC/LPCM audio
 
 class MiracastReceiver {
 public:
@@ -28,6 +33,7 @@ public:
     struct Config {
         std::string display_name = "1PhoneMirror";
         bool require_pin = false;
+        uint16_t rtsp_port = 7236;  // Standard WFD RTSP port
     };
 
     bool start(const Config& config);
@@ -42,11 +48,10 @@ public:
 
 private:
     struct Impl;
-    Impl* impl_ = nullptr;
+    std::unique_ptr<Impl> impl_;
 
     std::atomic<bool> running_{false};
-    std::thread sta_thread_;
-    unsigned long sta_thread_id_ = 0;
+    std::thread worker_thread_;
 
     media::OnVideoFrame on_video_;
     media::OnAudioFrame on_audio_;

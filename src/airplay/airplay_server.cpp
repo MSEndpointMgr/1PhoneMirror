@@ -65,20 +65,38 @@ bool AirPlayServer::start(const Config& config) {
     // Register RTSP handlers for AirPlay control
     // AirPlay uses non-standard RTSP methods
     rtsp_.on_method("GET", [this](const auto& req) { return handle_info(req); });
-    rtsp_.on_method("POST", [this](const auto& req) {
-        // Route POST based on URI
-        if (req.uri.find("/pair-setup") != std::string::npos)
-            return handle_pair_setup(req);
-        if (req.uri.find("/pair-verify") != std::string::npos)
-            return handle_pair_verify(req);
-        if (req.uri.find("/fp-setup") != std::string::npos)
-            return handle_fp_setup(req);
-        if (req.uri.find("/feedback") != std::string::npos) {
+    rtsp_.on_method("POST", [this](const auto& req) -> network::RtspResponse {
+        try {
+            // Route POST based on URI — order matters: more-specific paths first.
+            if (req.uri.find("/pair-pin-start") != std::string::npos)
+                return handle_pair_pin_start(req);
+            if (req.uri.find("/pair-setup-pin") != std::string::npos)
+                return handle_pair_setup_pin(req);
+            if (req.uri.find("/pair-setup") != std::string::npos)
+                return handle_pair_setup(req);
+            if (req.uri.find("/pair-verify") != std::string::npos)
+                return handle_pair_verify(req);
+            if (req.uri.find("/fp-setup") != std::string::npos)
+                return handle_fp_setup(req);
+            if (req.uri.find("/feedback") != std::string::npos) {
+                network::RtspResponse resp;
+                resp.status_code = 200;
+                return resp;
+            }
+            return handle_default(req);
+        } catch (const std::exception& e) {
+            std::cerr << "[AirPlay] EXCEPTION in POST handler (" << req.uri
+                      << "): " << e.what() << "\n";
             network::RtspResponse resp;
-            resp.status_code = 200;
+            resp.status_code = 500;
+            return resp;
+        } catch (...) {
+            std::cerr << "[AirPlay] UNKNOWN EXCEPTION in POST handler ("
+                      << req.uri << ")\n";
+            network::RtspResponse resp;
+            resp.status_code = 500;
             return resp;
         }
-        return handle_default(req);
     });
     rtsp_.on_method("SETUP", [this](const auto& req) { return handle_setup(req); });
     rtsp_.on_method("RECORD", [this](const auto& req) {
@@ -113,7 +131,7 @@ bool AirPlayServer::start(const Config& config) {
     }
 
     // Advertise via mDNS
-    if (!mdns_.register_airplay(config_.server_name, config_.port, hw_addr_)) {
+    if (!mdns_.register_airplay(config_.server_name, config_.port, hw_addr_, require_pin_)) {
         std::cerr << "[AirPlay] Warning: mDNS registration failed, "
                   << "devices may not discover this receiver automatically\n";
     }
@@ -353,6 +371,209 @@ network::RtspResponse AirPlayServer::handle_pair_verify(const network::RtspReque
         resp.status_code = 400;
     }
 
+    return resp;
+}
+
+// ---- AirPlay 1 PIN pairing (SRP-6a + AES-CBC) ----
+//
+// /pair-pin-start (POST, empty body) — server generates 4-digit PIN and
+//   shows it on screen. Always returns 200.
+//
+// /pair-setup-pin (POST) — three sequential binary-plist exchanges:
+//   step 1 in : { "method": "pin", "user": "Pair-Setup" }
+//   step 1 out: { "pk": B (256), "salt": s (16) }
+//   step 2 in : { "pk": A (256), "proof": M1 (20) }
+//   step 2 out: { "proof": M2 (20) }
+//   step 3 in : { "epk": ENC(client LTPK), "authTag": ... }
+//   step 3 out: { "epk": ENC(server LTPK), "authTag": ... }
+
+network::RtspResponse AirPlayServer::handle_pair_pin_start(const network::RtspRequest& /*req*/) {
+    network::RtspResponse resp;
+    resp.status_code = 200;
+
+    // Generate 4-digit PIN.
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> dist(0, 9999);
+    char pin[5];
+    std::snprintf(pin, sizeof(pin), "%04d", dist(gen));
+
+    {
+        std::lock_guard<std::mutex> lk(pin_mutex_);
+        current_pin_ = pin;
+        srp_active_ = false; // forced fresh start on next /pair-setup-pin
+    }
+
+    if (on_pin_display_) on_pin_display_(pin);
+    std::cout << "[AirPlay] /pair-pin-start — PIN = " << pin << "\n";
+
+    return resp;
+}
+
+network::RtspResponse AirPlayServer::handle_pair_setup_pin(const network::RtspRequest& req) {
+    network::RtspResponse resp;
+    resp.status_code = 200;
+    resp.headers["Content-Type"] = "application/x-apple-binary-plist";
+
+    BPlistReader r;
+    if (!r.parse(req.body.data(), req.body.size())) {
+        std::cerr << "[AirPlay] pair-setup-pin: body is not a binary plist ("
+                  << req.body.size() << " bytes)\n";
+        // Hex-dump the first 256 bytes so we can see what iOS sent.
+        std::cerr << "[AirPlay] body hex:";
+        size_t n = std::min<size_t>(256, req.body.size());
+        for (size_t i = 0; i < n; i++) {
+            char hb[4]; std::snprintf(hb, 4, "%02x", req.body[i]);
+            std::cerr << (i % 32 == 0 ? "\n  " : " ") << hb;
+        }
+        std::cerr << std::endl;
+        resp.status_code = 400;
+        return resp;
+    }
+    // Serialize the entire SRP/PIN state machine — RTSP runs each client on
+    // its own thread, and srp_pin_ holds non-thread-safe BIGNUM state.
+    std::lock_guard<std::mutex> lk(pin_mutex_);
+
+    // ----- Step 1: client requests SRP parameters -----
+    if (r.has_key("method") && r.has_key("user")) {
+        std::string method, user;
+        r.get_string("method", method);
+        r.get_string("user", user);
+        std::cout << "[AirPlay] pair-setup-pin step 1 — method=" << method
+                  << " user=" << user << "\n";
+
+        if (current_pin_.empty()) {
+            std::cerr << "[AirPlay] pair-setup-pin: no active PIN — call /pair-pin-start first\n";
+            resp.status_code = 400;
+            return resp;
+        }
+
+        // SRP username "I" is the CLIENT-supplied "user" field (iPad's own
+        // device-id, e.g. its MAC). iOS computes x = H(s | H(I | ":" | PIN))
+        // using this same I, so the server MUST use the value the client sent.
+        const std::string& srp_username = user;
+        if (!srp_pin_.start(current_pin_, srp_username)) {
+            std::cerr << "[AirPlay] SRP start failed\n";
+            resp.status_code = 500;
+            return resp;
+        }
+        srp_active_ = true;
+
+        auto salt = srp_pin_.get_salt();
+        auto B    = srp_pin_.get_B();
+
+        BPlistWriter w;
+        std::vector<std::pair<int, int>> root;
+        // Order matches UxPlay: pk first, then salt.
+        root.push_back({w.add_string("pk"),   w.add_data(B.data(),    B.size())});
+        root.push_back({w.add_string("salt"), w.add_data(salt.data(), salt.size())});
+        resp.body = w.build(w.add_dict(root));
+
+        std::cout << "[AirPlay] pair-setup-pin step 1 → salt(" << salt.size()
+                  << ") + B(" << B.size() << ")\n";
+        return resp;
+    }
+
+    // ----- Step 2: client sends A + M1 -----
+    if (r.has_key("pk") && r.has_key("proof")) {
+        if (!srp_active_) {
+            std::cerr << "[AirPlay] pair-setup-pin step 2 without active SRP\n";
+            resp.status_code = 400;
+            return resp;
+        }
+        std::vector<uint8_t> A, M1;
+        r.get_data("pk",    A);
+        r.get_data("proof", M1);
+        std::cout << "[AirPlay] pair-setup-pin step 2 — A(" << A.size()
+                  << ") M1(" << M1.size() << ")" << std::endl;
+        if (A.size() != 256 || M1.size() != 20) {
+            std::cerr << "[AirPlay] pair-setup-pin step 2: invalid sizes — abort" << std::endl;
+            srp_active_ = false;
+            resp.status_code = 400;
+            return resp;
+        }
+
+        bool ok;
+        try {
+            ok = srp_pin_.process_client_pubkey(A, M1);
+        } catch (const std::exception& e) {
+            std::cerr << "[AirPlay] step 2: process_client_pubkey threw: "
+                      << e.what() << std::endl;
+            srp_active_ = false;
+            resp.status_code = 500;
+            return resp;
+        }
+        if (!ok) {
+            std::cerr << "[AirPlay] SRP M1 verification failed (wrong PIN)" << std::endl;
+            if (on_pin_display_) on_pin_display_("");
+            srp_active_ = false;
+            resp.status_code = 470; // AirPlay "auth required / wrong PIN"
+            return resp;
+        }
+
+        auto M2 = srp_pin_.get_M2();
+        BPlistWriter w;
+        std::vector<std::pair<int, int>> root;
+        root.push_back({w.add_string("proof"), w.add_data(M2.data(), M2.size())});
+        resp.body = w.build(w.add_dict(root));
+
+        std::cout << "[AirPlay] pair-setup-pin step 2 → M2(" << M2.size()
+                  << ") — PIN accepted" << std::endl;
+        return resp;
+    }
+
+    // ----- Step 3: client sends encrypted LTPK -----
+    if (r.has_key("epk")) {
+        if (!srp_active_ || !srp_pin_.is_authenticated()) {
+            std::cerr << "[AirPlay] pair-setup-pin step 3 without authenticated SRP\n";
+            resp.status_code = 400;
+            return resp;
+        }
+
+        std::vector<uint8_t> epk, authTag;
+        r.get_data("epk", epk);
+        r.get_data("authTag", authTag);
+        std::cout << "[AirPlay] pair-setup-pin step 3 — epk(" << epk.size()
+                  << ") authTag(" << authTag.size() << ")\n";
+
+        auto K = srp_pin_.get_session_key();
+        auto client_ltpk = srp_pin_decrypt_ltpk(K, epk);
+        if (client_ltpk.size() < 32) {
+            std::cerr << "[AirPlay] step 3: failed to decrypt client LTPK ("
+                      << client_ltpk.size() << " bytes)\n";
+            resp.status_code = 470;
+            return resp;
+        }
+        std::cout << "[AirPlay] step 3 — decrypted client LTPK ("
+                  << client_ltpk.size() << " bytes)\n";
+
+        auto our_ltpk = pairing_.get_public_key();
+        auto our_epk  = srp_pin_encrypt_ltpk(K, our_ltpk);
+        if (our_epk.empty()) {
+            std::cerr << "[AirPlay] step 3: failed to encrypt our LTPK\n";
+            resp.status_code = 500;
+            return resp;
+        }
+
+        BPlistWriter w;
+        std::vector<std::pair<int, int>> root;
+        root.push_back({w.add_string("epk"), w.add_data(our_epk.data(), our_epk.size())});
+        // authTag echo (AirPlay 1 doesn't actually GCM-tag here; many clients ignore).
+        if (!authTag.empty())
+            root.push_back({w.add_string("authTag"), w.add_data(authTag.data(), authTag.size())});
+        resp.body = w.build(w.add_dict(root));
+
+        // Pairing complete — clear PIN from screen.
+        if (on_pin_display_) on_pin_display_("");
+        current_pin_.clear();
+        srp_active_ = false;
+
+        std::cout << "[AirPlay] PIN pairing complete — sent encrypted server LTPK\n";
+        return resp;
+    }
+
+    std::cerr << "[AirPlay] pair-setup-pin: unrecognized body keys\n";
+    resp.status_code = 400;
     return resp;
 }
 

@@ -135,10 +135,13 @@ struct AuthChallengeMsg {
 struct AuthResponseMsg {
     std::vector<uint8_t> signature;        // field 1
     std::vector<uint8_t> client_auth_cert; // field 2
+    std::vector<std::vector<uint8_t>> intermediate_certs; // field 3 (repeated)
+    uint32_t signature_algorithm = 0;      // field 4 (0=UNSPECIFIED, 1=RSASSA_PKCS1v15, 2=RSASSA_PSS)
+    std::vector<uint8_t> sender_nonce;     // field 5 (echo back)
+    uint32_t hash_algorithm = 0;           // field 6 (0=SHA1, 1=SHA256)
 
     std::vector<uint8_t> encode() const {
         std::vector<uint8_t> out;
-        // field 1: signature
         auto enc_varint = [](std::vector<uint8_t>& o, uint32_t v) {
             while (v > 0x7f) { o.push_back((v & 0x7f) | 0x80); v >>= 7; }
             o.push_back(v & 0x7f);
@@ -149,6 +152,76 @@ struct AuthResponseMsg {
         };
         enc_bytes(out, 1, signature);
         enc_bytes(out, 2, client_auth_cert);
+        for (const auto& cert : intermediate_certs) {
+            enc_bytes(out, 3, cert);
+        }
+        if (signature_algorithm != 0) {
+            enc_varint(out, (4 << 3) | 0);
+            enc_varint(out, signature_algorithm);
+        }
+        if (!sender_nonce.empty()) {
+            enc_bytes(out, 5, sender_nonce);
+        }
+        if (hash_algorithm != 0) {
+            enc_varint(out, (6 << 3) | 0);
+            enc_varint(out, hash_algorithm);
+        }
+        return out;
+    }
+};
+
+// DeviceAuthMessage wrapper — the outer protobuf in urn:x-cast:com.google.cast.tp.deviceauth
+// Fields: 1=AuthChallenge, 2=AuthResponse, 3=AuthError
+struct DeviceAuthMsg {
+    std::vector<uint8_t> inner; // raw bytes of whichever field was present
+
+    // Extract the inner sub-message from field_num (1=challenge, 2=response)
+    static bool unwrap(const uint8_t* data, size_t len, int field_num,
+                       std::vector<uint8_t>& out) {
+        size_t pos = 0;
+        while (pos < len) {
+            uint32_t raw = 0; int shift = 0;
+            while (pos < len) {
+                uint8_t b = data[pos++];
+                raw |= (uint32_t)(b & 0x7f) << shift;
+                if (!(b & 0x80)) break;
+                shift += 7;
+            }
+            uint32_t fn = raw >> 3, wt = raw & 7;
+            if (wt == 2) {
+                uint32_t slen = 0; shift = 0;
+                while (pos < len) {
+                    uint8_t b = data[pos++];
+                    slen |= (uint32_t)(b & 0x7f) << shift;
+                    if (!(b & 0x80)) break;
+                    shift += 7;
+                }
+                if (pos + slen > len) return false;
+                if ((int)fn == field_num) {
+                    out.assign(data + pos, data + pos + slen);
+                    return true;
+                }
+                pos += slen;
+            } else if (wt == 0) {
+                while (pos < len && (data[pos] & 0x80)) pos++;
+                if (pos < len) pos++;
+            } else {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    // Wrap encoded response bytes in DeviceAuthMessage field 2
+    static std::vector<uint8_t> wrap_response(const std::vector<uint8_t>& response) {
+        std::vector<uint8_t> out;
+        auto enc_varint = [](std::vector<uint8_t>& o, uint32_t v) {
+            while (v > 0x7f) { o.push_back((v & 0x7f) | 0x80); v >>= 7; }
+            o.push_back(v & 0x7f);
+        };
+        enc_varint(out, (2 << 3) | 2); // field 2, wire type 2
+        enc_varint(out, (uint32_t)response.size());
+        out.insert(out.end(), response.begin(), response.end());
         return out;
     }
 };

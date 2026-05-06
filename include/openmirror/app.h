@@ -31,6 +31,7 @@ public:
         bool enable_airplay = true;
         bool enable_miracast = true;
         bool enable_cast = true;
+        bool airplay_require_pin = false;
     };
 
     bool init(const Config& config);

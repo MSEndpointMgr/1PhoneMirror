@@ -29,6 +29,9 @@ public:
     void set_phone_frame_enabled(bool enabled) { phone_frame_enabled_ = enabled; }
     bool phone_frame_enabled() const { return phone_frame_enabled_; }
 
+    // PIN overlay (used by AirPlay PIN pairing). Pass an empty string to clear.
+    void set_pin_code(const std::string& pin);
+
 private:
     void render_frame();
     void draw_island();
@@ -168,6 +171,18 @@ private:
     // Frame position
     int frame_dst_x_ = 0, frame_dst_y_ = 0;
     int frame_dst_w_ = 0, frame_dst_h_ = 0;
+
+    // PIN overlay (AirPlay PIN pairing)
+    std::mutex pin_mutex_;
+    std::string pin_code_;
+    SDL_Texture* pin_label_tex_ = nullptr;
+    int pin_label_w_ = 0, pin_label_h_ = 0;
+    SDL_Texture* pin_digits_tex_ = nullptr;
+    int pin_digits_w_ = 0, pin_digits_h_ = 0;
+    std::string pin_digits_cached_;
+    SDL_Texture* pin_note_tex_ = nullptr;
+    int pin_note_w_ = 0, pin_note_h_ = 0;
+    void draw_pin_overlay();
 
     std::string screenshot_dir_;
     std::atomic<bool> running_{false};

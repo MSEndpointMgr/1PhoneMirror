@@ -55,6 +55,11 @@ bool App::init(const Config& config) {
         ap_config.port = AIRPLAY_PORT;
         ap_config.mirror_port = AIRPLAY_MIRROR_PORT;
 
+        airplay_.set_require_pin(config_.airplay_require_pin);
+        airplay_.set_pin_display_callback([this](const std::string& pin) {
+            renderer_.set_pin_code(pin);
+        });
+
         if (airplay_.start(ap_config)) {
             std::cout << "[App] AirPlay receiver active (iOS)\n";
         } else {

@@ -3,11 +3,13 @@
 #include <openmirror/airplay/mdns_service.h>
 #include <openmirror/airplay/mirror_buffer.h>
 #include <openmirror/airplay/pairing.h>
+#include <openmirror/airplay/srp_pin.h>
 #include <openmirror/media/decoder.h>
 #include <openmirror/network/rtsp_server.h>
 #include <openmirror/network/tcp_server.h>
 #include <atomic>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -41,11 +43,24 @@ public:
     using OnDisconnect = std::function<void()>;
     void set_disconnect_callback(OnDisconnect cb) { on_disconnect_ = std::move(cb); }
 
+    // Called whenever the on-screen PIN should be shown or cleared.
+    // The callback receives the 4-digit PIN string, or "" when pairing
+    // completes (or fails) and the PIN should be hidden.
+    using OnPinDisplay = std::function<void(const std::string&)>;
+    void set_pin_display_callback(OnPinDisplay cb) { on_pin_display_ = std::move(cb); }
+
+    // Enable PIN-required pairing for managed devices (advertises pw=true,
+    // flags=0x44 in mDNS, and serves the /pair-pin-start endpoint).
+    void set_require_pin(bool require) { require_pin_ = require; }
+    bool require_pin() const { return require_pin_; }
+
 private:
     // RTSP method handlers (the AirPlay control protocol)
     network::RtspResponse handle_info(const network::RtspRequest& req);
     network::RtspResponse handle_pair_setup(const network::RtspRequest& req);
     network::RtspResponse handle_pair_verify(const network::RtspRequest& req);
+    network::RtspResponse handle_pair_pin_start(const network::RtspRequest& req);
+    network::RtspResponse handle_pair_setup_pin(const network::RtspRequest& req);
     network::RtspResponse handle_fp_setup(const network::RtspRequest& req);
     network::RtspResponse handle_setup(const network::RtspRequest& req);
     network::RtspResponse handle_get_parameter(const network::RtspRequest& req);
@@ -71,12 +86,20 @@ private:
     Pairing pairing_;
     FairPlay fairplay_;
     MirrorBuffer mirror_buffer_;
-
-    Config config_;
     uint8_t hw_addr_[6] = {};
     uint8_t aes_key_[16] = {};       // FairPlay-decrypted AES key
     bool has_aes_key_ = false;
     uint64_t stream_connection_id_ = 0;
+
+    Config config_;
+
+    // PIN pairing (SRP-6a) state
+    SrpPinServer srp_pin_;
+    std::mutex pin_mutex_;
+    std::string current_pin_;
+    bool require_pin_ = false;
+    bool srp_active_ = false;
+    OnPinDisplay on_pin_display_;
 
     std::atomic<bool> running_{false};
     std::thread mirror_thread_;

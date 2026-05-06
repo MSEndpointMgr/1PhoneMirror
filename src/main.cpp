@@ -2,12 +2,66 @@
 #include <openmirror/config.h>
 #include <openmirror/log_buffer.h>
 #include <openmirror/network/tcp_server.h>
+#include <openmirror/airplay/srp_pin.h>
 #include <iostream>
 #include <string>
 
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
+
+// Write a minidump and log a one-line summary on any unhandled SEH crash so
+// post-mortem analysis can pinpoint the failing thread/address. Dumps go to
+// %LOCALAPPDATA%\1PhoneMirror\Crashes\crash_<pid>_<ts>.dmp .
+static LONG WINAPI om_unhandled_filter(EXCEPTION_POINTERS* info) {
+    if (info && info->ExceptionRecord) {
+        std::cerr << "[CRASH] code=0x" << std::hex
+                  << info->ExceptionRecord->ExceptionCode
+                  << " addr=0x" << reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress)
+                  << " thread=0x" << GetCurrentThreadId() << std::dec << "\n";
+        std::cerr.flush();
+    }
+
+    char base[MAX_PATH] = {0};
+    if (GetEnvironmentVariableA("LOCALAPPDATA", base, MAX_PATH) == 0) {
+        return EXCEPTION_EXECUTE_HANDLER;
+    }
+    char dir[MAX_PATH];
+    std::snprintf(dir, sizeof(dir), "%s\\1PhoneMirror\\Crashes", base);
+    CreateDirectoryA(base, nullptr);
+    char parent[MAX_PATH];
+    std::snprintf(parent, sizeof(parent), "%s\\1PhoneMirror", base);
+    CreateDirectoryA(parent, nullptr);
+    CreateDirectoryA(dir, nullptr);
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char path[MAX_PATH];
+    std::snprintf(path, sizeof(path),
+                  "%s\\crash_%lu_%04d%02d%02d_%02d%02d%02d.dmp",
+                  dir, GetCurrentProcessId(),
+                  st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+    HANDLE hf = CreateFileA(path, GENERIC_WRITE, 0, nullptr,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hf != INVALID_HANDLE_VALUE) {
+        MINIDUMP_EXCEPTION_INFORMATION mei{};
+        mei.ThreadId = GetCurrentThreadId();
+        mei.ExceptionPointers = info;
+        mei.ClientPointers = FALSE;
+        MINIDUMP_TYPE type = (MINIDUMP_TYPE)(MiniDumpWithDataSegs |
+                                              MiniDumpWithThreadInfo |
+                                              MiniDumpWithUnloadedModules);
+        MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(),
+                          hf, type, info ? &mei : nullptr, nullptr, nullptr);
+        CloseHandle(hf);
+        std::cerr << "[CRASH] minidump written: " << path << "\n";
+        std::cerr.flush();
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+}
 
 // Check if 1PhoneMirror firewall rules exist, offer to create them if not
 static void check_firewall_rules() {
@@ -100,11 +154,14 @@ void print_usage(const char* argv0) {
               << "  --height <pixels>  Window height (default: 720)\n"
               << "  --no-airplay       Disable AirPlay (iOS) receiver\n"
               << "  --no-miracast      Disable Miracast (Android) receiver\n"
+              << "  --airplay-pin      Require on-screen PIN for AirPlay (managed iOS)\n"
               << "  --help             Show this help\n";
 }
 
 int main(int argc, char* argv[]) {
 #ifdef _WIN32
+    // Install crash handler first so we capture failures during startup too.
+    SetUnhandledExceptionFilter(om_unhandled_filter);
     // Initialize Winsock
     openmirror::network::TcpServer::init_winsock();
     // Check and offer to create firewall rules
@@ -132,6 +189,11 @@ int main(int argc, char* argv[]) {
             config.enable_airplay = false;
         } else if (arg == "--no-miracast") {
             config.enable_miracast = false;
+        } else if (arg == "--airplay-pin") {
+            config.airplay_require_pin = true;
+        } else if (arg == "--srp-self-test") {
+            bool ok = openmirror::airplay::srp_pin_self_test();
+            return ok ? 0 : 2;
         } else {
             std::cerr << "Unknown option: " << arg << "\n";
             print_usage(argv[0]);

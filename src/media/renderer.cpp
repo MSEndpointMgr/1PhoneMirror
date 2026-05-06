@@ -501,6 +501,8 @@ void Renderer::shutdown() {
     if (toast_tex_) { SDL_DestroyTexture(toast_tex_); toast_tex_ = nullptr; }
     if (tooltip_tex_) { SDL_DestroyTexture(tooltip_tex_); tooltip_tex_ = nullptr; }
     if (waiting_tex_) { SDL_DestroyTexture(waiting_tex_); waiting_tex_ = nullptr; }
+    if (pin_label_tex_) { SDL_DestroyTexture(pin_label_tex_); pin_label_tex_ = nullptr; }
+    if (pin_digits_tex_) { SDL_DestroyTexture(pin_digits_tex_); pin_digits_tex_ = nullptr; }
     if (icon_texture_) { SDL_DestroyTexture(icon_texture_); icon_texture_ = nullptr; }
     if (logo_texture_) { SDL_DestroyTexture(logo_texture_); logo_texture_ = nullptr; }
     if (ios_instr_tex_) { SDL_DestroyTexture(ios_instr_tex_); ios_instr_tex_ = nullptr; }
@@ -1159,6 +1161,9 @@ void Renderer::render_frame() {
         update_window_shape();
         window_shape_set_ = true;
     }
+
+    // PIN overlay (drawn last, on top of everything)
+    draw_pin_overlay();
 
     SDL_RenderPresent(sdl_renderer_);
 
@@ -2004,5 +2009,100 @@ void Renderer::begin_window_drag() {
 }
 
 void Renderer::stop() { running_.store(false); }
+
+void Renderer::set_pin_code(const std::string& pin) {
+    std::lock_guard<std::mutex> lk(pin_mutex_);
+    pin_code_ = pin;
+}
+
+void Renderer::draw_pin_overlay() {
+    if (!sdl_renderer_ || !window_) return;
+    std::string pin;
+    {
+        std::lock_guard<std::mutex> lk(pin_mutex_);
+        pin = pin_code_;
+    }
+    if (pin.empty()) {
+        // Free cached textures when not in use.
+        if (pin_label_tex_)  { SDL_DestroyTexture(pin_label_tex_);  pin_label_tex_  = nullptr; }
+        if (pin_digits_tex_) { SDL_DestroyTexture(pin_digits_tex_); pin_digits_tex_ = nullptr; }
+        pin_digits_cached_.clear();
+        return;
+    }
+
+    int win_w = 0, win_h = 0;
+    SDL_GetWindowSize(window_, &win_w, &win_h);
+    if (win_w <= 0 || win_h <= 0) return;
+
+    // Build textures lazily / when PIN changes.
+    if (!pin_label_tex_) {
+        pin_label_tex_ = make_text_texture(sdl_renderer_, "AirPlay PIN",
+                                           36, 220, 220, 220,
+                                           &pin_label_w_, &pin_label_h_);
+    }
+    if (!pin_note_tex_) {
+        pin_note_tex_ = make_text_texture(sdl_renderer_,
+                                          "Note: PIN pairing is experimental and may not work on all devices.",
+                                          14, 170, 170, 170,
+                                          &pin_note_w_, &pin_note_h_);
+    }
+    if (pin != pin_digits_cached_) {
+        if (pin_digits_tex_) { SDL_DestroyTexture(pin_digits_tex_); pin_digits_tex_ = nullptr; }
+        // Letter-spaced for readability ("1 2 3 4")
+        std::string spaced;
+        for (size_t i = 0; i < pin.size(); ++i) {
+            if (i) spaced += ' ';
+            spaced += pin[i];
+        }
+        pin_digits_tex_ = make_text_texture(sdl_renderer_, spaced,
+                                             140, 255, 255, 255,
+                                             &pin_digits_w_, &pin_digits_h_);
+        pin_digits_cached_ = pin;
+    }
+
+    // Centered card with semi-transparent dark backdrop.
+    int card_w = std::max(420, std::max(pin_digits_w_, pin_note_w_) + 80);
+    int card_h = pin_label_h_ + pin_digits_h_ + pin_note_h_ + 96;
+    int card_x = (win_w - card_w) / 2;
+    int card_y = (win_h - card_h) / 2;
+
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
+
+    // Dim the screen behind the card.
+    SDL_SetRenderDrawColor(sdl_renderer_, 0, 0, 0, 160);
+    SDL_Rect bg = {0, 0, win_w, win_h};
+    SDL_RenderFillRect(sdl_renderer_, &bg);
+
+    // Card background.
+    SDL_SetRenderDrawColor(sdl_renderer_, 28, 28, 32, 235);
+    SDL_Rect card = {card_x, card_y, card_w, card_h};
+    SDL_RenderFillRect(sdl_renderer_, &card);
+
+    // Card border.
+    SDL_SetRenderDrawColor(sdl_renderer_, 80, 80, 90, 255);
+    SDL_RenderDrawRect(sdl_renderer_, &card);
+
+    // Label.
+    if (pin_label_tex_) {
+        SDL_Rect dst = {card_x + (card_w - pin_label_w_) / 2,
+                        card_y + 18,
+                        pin_label_w_, pin_label_h_};
+        SDL_RenderCopy(sdl_renderer_, pin_label_tex_, nullptr, &dst);
+    }
+    // Digits.
+    if (pin_digits_tex_) {
+        SDL_Rect dst = {card_x + (card_w - pin_digits_w_) / 2,
+                        card_y + 18 + pin_label_h_ + 12,
+                        pin_digits_w_, pin_digits_h_};
+        SDL_RenderCopy(sdl_renderer_, pin_digits_tex_, nullptr, &dst);
+    }
+    // Footnote.
+    if (pin_note_tex_) {
+        SDL_Rect dst = {card_x + (card_w - pin_note_w_) / 2,
+                        card_y + 18 + pin_label_h_ + 12 + pin_digits_h_ + 16,
+                        pin_note_w_, pin_note_h_};
+        SDL_RenderCopy(sdl_renderer_, pin_note_tex_, nullptr, &dst);
+    }
+}
 
 } // namespace openmirror::media

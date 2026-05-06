@@ -94,12 +94,12 @@ std::string BPlistReader::read_string_object(uint64_t obj_idx) const {
 
     if (type == 0x5) {
         // ASCII string
-        if (data_start + count > len_) return "";
+        if (count > 65536 || data_start + count > len_) return "";
         return std::string(reinterpret_cast<const char*>(data_ + data_start),
                            static_cast<size_t>(count));
     }
-    // Unicode — extract ASCII-compatible chars
-    if (data_start + count * 2 > len_) return "";
+    // Unicode \u2014 extract ASCII-compatible chars
+    if (count > 65536 || data_start + count * 2 > len_) return "";
     std::string result;
     for (uint64_t i = 0; i < count; i++) {
         uint16_t ch = static_cast<uint16_t>(read_be(data_start + i * 2, 2));
@@ -117,7 +117,7 @@ std::vector<uint8_t> BPlistReader::read_data_object(uint64_t obj_idx) const {
 
     auto [count, extra] = decode_count(off);
     size_t data_start = off + 1 + extra;
-    if (data_start + count > len_) return {};
+    if (count > (1u << 24) || data_start + count > len_) return {};
 
     return std::vector<uint8_t>(data_ + data_start,
                                 data_ + data_start + count);
@@ -133,7 +133,7 @@ BPlistReader::DictInfo BPlistReader::read_dict(uint64_t obj_idx) const {
 
     auto [count, extra] = decode_count(off);
     size_t refs_start = off + 1 + extra;
-    if (refs_start + count * 2 * ref_size_ > len_) return info;
+    if (count > 4096 || refs_start + count * 2 * ref_size_ > len_) return info;
 
     info.key_refs.resize(count);
     info.val_refs.resize(count);
@@ -157,7 +157,7 @@ std::vector<uint64_t> BPlistReader::read_array(uint64_t obj_idx) const {
 
     auto [count, extra] = decode_count(off);
     size_t refs_start = off + 1 + extra;
-    if (refs_start + count * ref_size_ > len_) return {};
+    if (count > 4096 || refs_start + count * ref_size_ > len_) return {};
 
     std::vector<uint64_t> refs(count);
     for (uint64_t i = 0; i < count; i++) {
@@ -192,6 +192,17 @@ bool BPlistReader::has_key(const std::string& key) const {
     auto dict = read_dict(root_object_);
     for (size_t i = 0; i < dict.key_refs.size(); i++) {
         if (read_string_object(dict.key_refs[i]) == key) return true;
+    }
+    return false;
+}
+
+bool BPlistReader::get_string(const std::string& key, std::string& out) const {
+    auto dict = read_dict(root_object_);
+    for (size_t i = 0; i < dict.key_refs.size(); i++) {
+        if (read_string_object(dict.key_refs[i]) == key) {
+            out = read_string_object(dict.val_refs[i]);
+            return !out.empty();
+        }
     }
     return false;
 }
