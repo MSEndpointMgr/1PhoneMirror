@@ -441,6 +441,8 @@ network::RtspResponse AirPlayServer::handle_pair_setup_pin(const network::RtspRe
             return resp;
         }
 
+        // SRP username "I" is hardcoded to "Pair-Setup" per AirPlay 1 spec;
+        // the "user" field in the bplist is just the device MAC (metadata).
         if (!srp_pin_.start(current_pin_)) {
             std::cerr << "[AirPlay] SRP start failed\n";
             resp.status_code = 500;
@@ -473,16 +475,26 @@ network::RtspResponse AirPlayServer::handle_pair_setup_pin(const network::RtspRe
         r.get_data("pk",    A);
         r.get_data("proof", M1);
         std::cout << "[AirPlay] pair-setup-pin step 2 — A(" << A.size()
-                  << ") M1(" << M1.size() << ")\n";
+                  << ") M1(" << M1.size() << ")" << std::endl;
         if (A.size() != 256 || M1.size() != 20) {
-            std::cerr << "[AirPlay] pair-setup-pin step 2: invalid sizes — abort\n";
+            std::cerr << "[AirPlay] pair-setup-pin step 2: invalid sizes — abort" << std::endl;
             srp_active_ = false;
             resp.status_code = 400;
             return resp;
         }
 
-        if (!srp_pin_.process_client_pubkey(A, M1)) {
-            std::cerr << "[AirPlay] SRP M1 verification failed (wrong PIN)\n";
+        bool ok;
+        try {
+            ok = srp_pin_.process_client_pubkey(A, M1);
+        } catch (const std::exception& e) {
+            std::cerr << "[AirPlay] step 2: process_client_pubkey threw: "
+                      << e.what() << std::endl;
+            srp_active_ = false;
+            resp.status_code = 500;
+            return resp;
+        }
+        if (!ok) {
+            std::cerr << "[AirPlay] SRP M1 verification failed (wrong PIN)" << std::endl;
             if (on_pin_display_) on_pin_display_("");
             srp_active_ = false;
             resp.status_code = 470; // AirPlay "auth required / wrong PIN"
@@ -496,7 +508,7 @@ network::RtspResponse AirPlayServer::handle_pair_setup_pin(const network::RtspRe
         resp.body = w.build(w.add_dict(root));
 
         std::cout << "[AirPlay] pair-setup-pin step 2 → M2(" << M2.size()
-                  << ") — PIN accepted\n";
+                  << ") — PIN accepted" << std::endl;
         return resp;
     }
 

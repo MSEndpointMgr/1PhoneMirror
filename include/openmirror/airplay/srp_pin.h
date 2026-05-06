@@ -28,8 +28,9 @@ public:
     SrpPinServer& operator=(const SrpPinServer&) = delete;
 
     // Start a new SRP session with the given 4-digit PIN string.
-    // Username is hard-coded to "Pair-Setup" per AirPlay convention.
-    bool start(const std::string& pin);
+    // The username (SRP "I") defaults to "Pair-Setup" but may be overridden
+    // \u2014 iOS clients send their device MAC address as the username.
+    bool start(const std::string& pin, const std::string& username = "Pair-Setup");
 
     // 16-byte random salt (s), generated in start().
     std::vector<uint8_t> get_salt() const;

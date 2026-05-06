@@ -121,11 +121,12 @@ struct SrpPinServer::Impl {
 SrpPinServer::SrpPinServer() : impl_(new Impl()) {}
 SrpPinServer::~SrpPinServer() { delete impl_; }
 
-bool SrpPinServer::start(const std::string& pin) {
+bool SrpPinServer::start(const std::string& pin, const std::string& username) {
     authenticated_ = false;
     impl_->ready = false;
     impl_->M2.clear();
     impl_->K.clear();
+    impl_->username = username.empty() ? "Pair-Setup" : username;
 
     if (!BN_hex2bn(&impl_->N, kRFC5054_Group14_N_hex)) return false;
     if (!BN_set_word(impl_->g, 2)) return false;
