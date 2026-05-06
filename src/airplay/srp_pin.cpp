@@ -131,12 +131,24 @@ bool SrpPinServer::start(const std::string& pin, const std::string& username) {
     if (!BN_hex2bn(&impl_->N, kRFC5054_Group14_N_hex)) return false;
     if (!BN_set_word(impl_->g, 2)) return false;
 
-    // k = SHA1(N | PAD(g))
+    // k = SHA1(N | g) — Stanford SRP convention with UNPADDED g (single
+    // byte 0x02), as used by AirPlay PIN setup. NOT the RFC 5054
+    // SHA1(N | PAD(g)) variant.
     std::vector<uint8_t> kbuf;
     append_pad(kbuf, impl_->N);
-    append_pad(kbuf, impl_->g);
+    {
+        int gn = BN_num_bytes(impl_->g);
+        std::vector<uint8_t> gb(gn);
+        BN_bn2bin(impl_->g, gb.data());
+        kbuf.insert(kbuf.end(), gb.begin(), gb.end());
+    }
     auto kdig = sha1(kbuf);
     if (!BN_bin2bn(kdig.data(), (int)kdig.size(), impl_->k)) return false;
+    {
+        std::cerr << "[SRP] k=";
+        for (auto b : kdig) { char h[4]; std::snprintf(h,4,"%02x",b); std::cerr << h; }
+        std::cerr << std::endl;
+    }
 
     // salt s — 16 random bytes
     uint8_t salt_bytes[16];
