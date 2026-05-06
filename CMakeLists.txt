@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(1PhoneMirror VERSION 0.1.0 LANGUAGES C CXX)
+project(1PhoneMirror VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,6 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(ENABLE_AIRPLAY "Build AirPlay receiver module" ON)
 option(ENABLE_MIRACAST "Build Miracast receiver module (Windows only)" ON)
 option(ENABLE_CAST "Build Google Cast receiver module" ON)
+option(ENABLE_ANDROID "Build Android (scrcpy-based) screen mirror receiver" ON)
 
 # --- Dependencies via vcpkg or find_package ---
 find_package(PkgConfig QUIET)
@@ -83,6 +84,13 @@ if(ENABLE_CAST)
     )
 endif()
 
+if(ENABLE_ANDROID)
+    list(APPEND CORE_SOURCES
+        src/android/scrcpy_receiver.cpp
+        src/android/android_dialog.cpp
+    )
+endif()
+
 # --- Target ---
 add_executable(1PhoneMirror ${CORE_SOURCES})
 
@@ -123,6 +131,10 @@ endif()
 if(ENABLE_CAST)
     target_compile_definitions(1PhoneMirror PRIVATE ENABLE_CAST=1)
     target_include_directories(1PhoneMirror PRIVATE ${CMAKE_SOURCE_DIR}/src)
+endif()
+
+if(ENABLE_ANDROID)
+    target_compile_definitions(1PhoneMirror PRIVATE ENABLE_ANDROID=1)
 endif()
 
 if(WIN32)

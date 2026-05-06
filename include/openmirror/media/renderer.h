@@ -50,6 +50,24 @@ public:
         disconnect_source_fn_ = std::move(disc);
     }
 
+    // Triggered by the user pressing 'A' on the idle screen — App pops up a
+    // pair/connect dialog and starts the Android receiver.
+    using AddAndroidFn = std::function<void()>;
+    void set_add_android_callback(AddAndroidFn cb) { add_android_fn_ = std::move(cb); }
+
+    // Connect dialog driven by the renderer (so the styling matches the app).
+    // Returns success status string when the worker finishes; the renderer
+    // only calls this on the main thread, so the App's implementation must
+    // either return quickly or hand off to a worker (current impl does).
+    using AndroidConnectFn = std::function<std::string(
+        const std::string& ip, const std::string& port, const std::string& pin)>;
+    using AndroidDisconnectFn = std::function<void()>;
+    void set_android_handlers(AndroidConnectFn connect, AndroidDisconnectFn disc) {
+        android_connect_fn_ = std::move(connect);
+        android_disconnect_fn_ = std::move(disc);
+    }
+    void show_android_panel(); // open from outside if you want
+
 private:
     void render_frame();
     void draw_island();
@@ -104,8 +122,8 @@ private:
     GetSourcesFn get_sources_fn_;
     SetActiveFn set_active_source_fn_;
     DisconnectFn disconnect_source_fn_;
-    std::vector<std::pair<std::string, BtnRect>> source_btns_;
-    // Right-click popup menu over any bezel button.
+    AddAndroidFn add_android_fn_;
+    std::vector<std::pair<std::string, BtnRect>> source_btns_;    // Right-click popup menu over any bezel button.
     // target is a string id: "menu", "log", or "src:<source-id>".
     bool bezel_menu_visible_ = false;
     std::string bezel_menu_target_;
@@ -237,6 +255,29 @@ private:
     std::string screenshot_dir_;
     std::atomic<bool> running_{false};
     std::atomic<bool> reset_requested_{false};
+
+    // Android connect panel (in-app, themed to match info panel)
+    bool android_panel_visible_ = false;
+    bool android_panel_animating_ = false;
+    float android_panel_anim_ = 0.0f;
+    std::chrono::steady_clock::time_point android_panel_anim_start_;
+    int android_focus_ = 0;            // 0=ip, 1=port, 2=pin
+    std::string android_ip_;
+    std::string android_port_;
+    std::string android_pin_;
+    std::string android_status_;
+    bool android_status_is_error_ = false;
+    bool android_busy_ = false;
+    std::mutex android_status_mutex_;
+    BtnRect android_panel_rect_;
+    BtnRect android_field_rects_[3]{};
+    BtnRect android_connect_btn_;
+    BtnRect android_disconnect_btn_;
+    BtnRect android_close_btn_;
+    AndroidConnectFn android_connect_fn_;
+    AndroidDisconnectFn android_disconnect_fn_;
+    void draw_android_panel();
+    void android_submit();
 };
 
 } // namespace openmirror::media

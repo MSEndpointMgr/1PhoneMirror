@@ -1,0 +1,28 @@
+1PhoneMirror — third-party components
+=====================================
+
+This product bundles the following components. Their source code is
+available from the upstream projects listed below.
+
+FFmpeg (avcodec, avformat, avutil, swresample, swscale)
+    License: LGPL v2.1+
+    Source : https://ffmpeg.org/download.html
+
+SDL2 (Simple DirectMedia Layer)
+    License: zlib
+    Source : https://www.libsdl.org/
+
+OpenSSL (libssl, libcrypto)
+    License: Apache 2.0
+    Source : https://www.openssl.org/source/
+
+stb_image / stb_image_write
+    License: Public Domain (or MIT)
+    Source : https://github.com/nothings/stb
+
+Apple Bonjour (dnssd) — used only at runtime if installed by the user.
+    License: Apple Public Source License
+    Source : https://opensource.apple.com/
+
+Per LGPL terms you may replace the FFmpeg DLLs in the install directory
+with your own builds, as long as ABI compatibility is preserved.

@@ -16,6 +16,9 @@
 #ifdef ENABLE_CAST
 #include <openmirror/cast/cast_receiver.h>
 #endif
+#ifdef ENABLE_ANDROID
+#include <openmirror/android/scrcpy_receiver.h>
+#endif
 
 namespace openmirror {
 
@@ -31,7 +34,13 @@ public:
         bool enable_airplay = true;
         bool enable_miracast = true;
         bool enable_cast = true;
+        bool enable_android = true;
         bool airplay_require_pin = false;
+
+        // Android (scrcpy) — auto-detected at startup if these are set.
+        std::string android_adb_path;          // path to adb.exe (empty = PATH)
+        std::string android_scrcpy_jar;        // path to scrcpy-server.jar
+        std::string android_device_serial;     // empty = auto-pick first
     };
 
     bool init(const Config& config);
@@ -41,6 +50,15 @@ public:
 
     void shutdown();
 
+#ifdef ENABLE_ANDROID
+    // Pair via (ip, pair_port, pin) and start mirroring once the device
+    // appears via mDNS auto-discovery. Returns a human-readable status.
+    std::string android_pair_and_connect(const std::string& ip,
+                                         const std::string& pair_port,
+                                         const std::string& pin);
+    void android_disconnect();
+#endif
+
 private:
     Config config_;
 
@@ -48,7 +66,7 @@ private:
     media::AudioOutput audio_;
 
     // Source priority: only one protocol streams at a time
-    enum class Source { None, AirPlay, Miracast, Cast };
+    enum class Source { None, AirPlay, Miracast, Cast, Android };
     std::atomic<int> active_source_{static_cast<int>(Source::None)};
 
 #ifdef ENABLE_AIRPLAY
@@ -59,6 +77,11 @@ private:
 #endif
 #ifdef ENABLE_CAST
     cast::CastReceiver cast_;
+#endif
+#ifdef ENABLE_ANDROID
+    android::AdbController   adb_;
+    android::ScrcpyReceiver  scrcpy_;
+    std::string android_jar_path_;
 #endif
 
     std::atomic<bool> running_{false};

@@ -6,12 +6,15 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <thread>
 #include <vector>
 
 #include <SDL.h>
 #include <SDL_syswm.h>
 
 #ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <shlobj.h>
 #include <shellapi.h>
 #endif
@@ -356,7 +359,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         "Control Center > Screen Mirroring > 1PhoneMirror",
         32, 130, 130, 130, &ios_instr_w_, &ios_instr_h_);
     android_instr_tex_ = make_text_texture(sdl_renderer_,
-        "Quick Settings > Cast / Screen Cast > 1PhoneMirror",
+        "Press A  -  Settings > Wireless debugging > Pair with code",
         32, 130, 130, 130, &android_instr_w_, &android_instr_h_);
     // Load platform icons from PNG files
     {
@@ -423,7 +426,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         footer_line2_.push_back(seg(L" ", 100, 100, 100));
         footer_line2_.push_back(seg(L"Simon Skotheimsvik, MVP", 100, 100, 100,
                                      "https://linktr.ee/simonskotheimsvik", "More info of Simon"));
-        footer_line2_.push_back(seg(L" \u00B7 v0.2.2", 100, 100, 100,
+        footer_line2_.push_back(seg(L" \u00B7 v0.3.0", 100, 100, 100,
                                      "", "Version history"));
     }
 #endif
@@ -437,10 +440,10 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
             line.tex = make_text_texture_w(sdl_renderer_, text, font_sz, r, g, b, &line.w, &line.h);
             return line;
         };
-        info_lines_.push_back(make_info(L"1PhoneMirror v0.2.2", 44, 255, 255, 255));
+        info_lines_.push_back(make_info(L"1PhoneMirror v0.3.0", 44, 255, 255, 255));
         info_lines_.push_back(make_info(L"AirPlay \u00B7 Miracast \u00B7 Google Cast", 34, 160, 160, 160));
         info_lines_.push_back({nullptr, 0, 0}); // spacer
-        info_lines_.push_back(make_info(L"F Fullscreen \u00B7 M Menu \u00B7 L Log", 30, 130, 130, 130));
+        info_lines_.push_back(make_info(L"F Fullscreen \u00B7 M Menu \u00B7 L Log \u00B7 A Add Android", 30, 130, 130, 130));
         info_lines_.push_back(make_info(L"I Info \u00B7 V Version \u00B7 Ctrl+S Screenshot \u00B7 Esc Quit", 30, 130, 130, 130));
     }
 #endif
@@ -456,20 +459,23 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
+        version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.3.0", 34, 200, 200, 255));
+        version_lines_.push_back(make_ver(L"Android mirroring (Wireless debugging, press A)", 30, 160, 160, 160));
+        version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.2.2", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Sametime iOS", 30, 160, 160, 160));
+        version_lines_.push_back(make_ver(L"Multiple iOS devices stay paired, switch from bezel dots", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.2.1", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"AirPlay Pin", 30, 160, 160, 160));
+        version_lines_.push_back(make_ver(L"AirPlay PIN pairing for trusted-device security", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.1.4", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Log viewer", 30, 160, 160, 160));
+        version_lines_.push_back(make_ver(L"Slide-out log viewer with live filtering (press L)", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"05.05.2026 \u2013 0.1.2", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Island menu", 30, 160, 160, 160));
+        version_lines_.push_back(make_ver(L"Dynamic island menu in top bezel for quick actions", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"05.05.2026 \u2013 0.1.1", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Screenshot option", 30, 160, 160, 160));
+        version_lines_.push_back(make_ver(L"Screenshot capture to clipboard and Pictures folder", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"05.05.2026 \u2013 0.1.0", 34, 200, 200, 255));
         version_lines_.push_back(make_ver(L"iOS AirPlay support", 30, 160, 160, 160));
@@ -616,6 +622,35 @@ void Renderer::run() {
                 return;
 
             case SDL_KEYDOWN:
+                // When the Android panel is open, capture keys for editing.
+                if (android_panel_visible_) {
+                    auto& fld = (android_focus_ == 0 ? android_ip_
+                              :  android_focus_ == 1 ? android_port_
+                              :                        android_pin_);
+                    if (event.key.keysym.sym == SDLK_BACKSPACE) {
+                        if (!fld.empty()) fld.pop_back();
+                        break;
+                    }
+                    if (event.key.keysym.sym == SDLK_TAB) {
+                        android_focus_ = (android_focus_ + 1) % 3;
+                        break;
+                    }
+                    if (event.key.keysym.sym == SDLK_RETURN ||
+                        event.key.keysym.sym == SDLK_KP_ENTER) {
+                        android_submit();
+                        break;
+                    }
+                    if (event.key.keysym.sym == SDLK_ESCAPE) {
+                        android_panel_visible_ = false;
+                        android_panel_animating_ = true;
+                        android_panel_anim_start_ = std::chrono::steady_clock::now();
+                        SDL_StopTextInput();
+                        break;
+                    }
+                    // Swallow everything else; SDL_TEXTINPUT delivers chars.
+                    break;
+                }
+
                 if (event.key.keysym.sym == SDLK_ESCAPE) {
                     running_.store(false);
                     return;
@@ -671,6 +706,31 @@ void Renderer::run() {
                     btn_flash_ = true;
                     btn_flash_start_ = std::chrono::steady_clock::now();
                 }
+                if (event.key.keysym.sym == SDLK_a && add_android_fn_) {
+                    show_android_panel();
+                }
+                break;
+
+            case SDL_TEXTINPUT:
+                if (android_panel_visible_) {
+                    auto& fld = (android_focus_ == 0 ? android_ip_
+                              :  android_focus_ == 1 ? android_port_
+                              :                        android_pin_);
+                    for (const char* p = event.text.text; *p; ++p) {
+                        char c = *p;
+                        if (android_focus_ == 0) {
+                            // IP: digits and dots
+                            if ((c >= '0' && c <= '9') || c == '.') fld.push_back(c);
+                        } else {
+                            // Port + PIN: digits only
+                            if (c >= '0' && c <= '9') fld.push_back(c);
+                        }
+                    }
+                    if (android_focus_ == 1 && android_port_.size() > 5)
+                        android_port_.resize(5);
+                    if (android_focus_ == 2 && android_pin_.size() > 6)
+                        android_pin_.resize(6);
+                }
                 break;
 
             case SDL_WINDOWEVENT:
@@ -681,6 +741,44 @@ void Renderer::run() {
                 break;
 
             case SDL_MOUSEBUTTONDOWN:
+                // Android panel intercepts left-clicks while open.
+                if (android_panel_visible_ && event.button.button == SDL_BUTTON_LEFT) {
+                    int mx = event.button.x, my = event.button.y;
+                    auto in = [&](const BtnRect& r) {
+                        return r.w > 0 && in_rect(mx, my, r.x, r.y, r.w, r.h);
+                    };
+                    if (in(android_close_btn_)) {
+                        android_panel_visible_ = false;
+                        android_panel_animating_ = true;
+                        android_panel_anim_start_ = std::chrono::steady_clock::now();
+                        SDL_StopTextInput();
+                        break;
+                    }
+                    if (in(android_connect_btn_) && !android_busy_) {
+                        android_submit();
+                        break;
+                    }
+                    if (in(android_disconnect_btn_)) {
+                        if (android_disconnect_fn_) android_disconnect_fn_();
+                        std::lock_guard lk(android_status_mutex_);
+                        android_status_ = "Disconnected.";
+                        android_status_is_error_ = false;
+                        break;
+                    }
+                    for (int i = 0; i < 3; ++i) {
+                        if (in(android_field_rects_[i])) { android_focus_ = i; break; }
+                    }
+                    // Click outside panel? close it.
+                    if (!in_rect(mx, my, android_panel_rect_.x, android_panel_rect_.y,
+                                 android_panel_rect_.w, android_panel_rect_.h)) {
+                        android_panel_visible_ = false;
+                        android_panel_animating_ = true;
+                        android_panel_anim_start_ = std::chrono::steady_clock::now();
+                        SDL_StopTextInput();
+                    }
+                    break;
+                }
+
                 if (event.button.button == SDL_BUTTON_RIGHT) {
                     int mx = event.button.x, my = event.button.y;
                     // Right-click on any bezel button opens its popup menu.
@@ -1208,6 +1306,7 @@ void Renderer::render_frame() {
     // Info/Version panels (furthest back — emerge from behind island)
     if (info_panel_visible_ || info_panel_animating_) draw_info_panel();
     if (version_panel_visible_ || version_panel_animating_) draw_version_panel();
+    if (android_panel_visible_ || android_panel_animating_) draw_android_panel();
 
     // Island bar (behind frame — slides behind bezel)
     if (island_anim_ > 0.01f) draw_island();
@@ -2247,6 +2346,316 @@ void Renderer::draw_log_panel() {
         log_sb_max_scroll_ = 0;
     }
 #endif
+}
+
+// ----------------------------------------------------------------------------
+// Android connect panel — themed to match info_panel
+// ----------------------------------------------------------------------------
+
+#ifdef _WIN32
+// Discover this machine's primary IPv4 by "connecting" a UDP socket to a
+// public address — the OS picks the outbound interface without sending
+// any packets. Returns "192.168.0." (first 3 octets + dot) or "".
+static std::string local_subnet_prefix() {
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s == INVALID_SOCKET) return {};
+    sockaddr_in dst{};
+    dst.sin_family = AF_INET;
+    dst.sin_port = htons(53);
+    dst.sin_addr.s_addr = inet_addr("8.8.8.8");
+    std::string out;
+    if (connect(s, (sockaddr*)&dst, sizeof(dst)) == 0) {
+        sockaddr_in name{};
+        int len = sizeof(name);
+        if (getsockname(s, (sockaddr*)&name, &len) == 0) {
+            unsigned long a = ntohl(name.sin_addr.s_addr);
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%lu.%lu.%lu.",
+                          (a >> 24) & 0xFF, (a >> 16) & 0xFF, (a >> 8) & 0xFF);
+            out = buf;
+        }
+    }
+    closesocket(s);
+    return out;
+}
+#endif
+
+void Renderer::show_android_panel() {
+    android_panel_visible_ = true;
+    android_panel_animating_ = true;
+    android_panel_anim_start_ = std::chrono::steady_clock::now();
+    android_focus_ = 0;
+#ifdef _WIN32
+    if (android_ip_.empty()) {
+        std::string pfx = local_subnet_prefix();
+        if (!pfx.empty()) android_ip_ = pfx;
+    }
+#endif
+    {
+        std::lock_guard lk(android_status_mutex_);
+        if (android_status_.empty())
+            android_status_ = "Enter the values from your phone's Wireless debugging screen.";
+    }
+    SDL_StartTextInput();
+}
+
+namespace {
+bool valid_ipv4(const std::string& s) {
+    int parts = 0, n = 0, digits = 0;
+    for (size_t i = 0; i <= s.size(); ++i) {
+        char c = i < s.size() ? s[i] : '.';
+        if (c == '.') {
+            if (digits == 0 || n > 255) return false;
+            ++parts; n = 0; digits = 0;
+            if (parts > 4) return false;
+        } else if (c >= '0' && c <= '9') {
+            n = n * 10 + (c - '0'); ++digits;
+            if (digits > 3) return false;
+        } else {
+            return false;
+        }
+    }
+    return parts == 4;
+}
+}
+
+void Renderer::android_submit() {
+    auto fail = [&](const std::string& m) {
+        std::lock_guard lk(android_status_mutex_);
+        android_status_ = m;
+        android_status_is_error_ = true;
+    };
+    if (!valid_ipv4(android_ip_))      return fail("Invalid IP address.");
+    if (android_port_.empty())          return fail("Port required.");
+    if (android_pin_.size() != 6)       return fail("PIN must be 6 digits.");
+    if (!android_connect_fn_)           return fail("Connect handler not wired.");
+
+    {
+        std::lock_guard lk(android_status_mutex_);
+        android_status_ = "Working...";
+        android_status_is_error_ = false;
+        android_busy_ = true;
+    }
+    std::string ip   = android_ip_;
+    std::string port = android_port_;
+    std::string pin  = android_pin_;
+    auto fn = android_connect_fn_;
+    std::thread([this, ip, port, pin, fn]() {
+        std::string r = fn(ip, port, pin);
+        bool err = (r.find("failed") != std::string::npos ||
+                    r.find("Invalid") != std::string::npos ||
+                    r.find("required") != std::string::npos ||
+                    r.find("not found") != std::string::npos);
+        std::lock_guard lk(android_status_mutex_);
+        android_status_ = r;
+        android_status_is_error_ = err;
+        android_busy_ = false;
+    }).detach();
+}
+
+void Renderer::draw_android_panel() {
+    if (frame_dst_w_ == 0) return;
+
+    // Animation
+    const float dur = 200.0f;
+    if (android_panel_animating_) {
+        float el = (float)std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - android_panel_anim_start_).count();
+        float t = std::min(1.0f, el / dur);
+        float e = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+        android_panel_anim_ = android_panel_visible_ ? e : 1.0f - e;
+        if (t >= 1.0f) android_panel_animating_ = false;
+    } else {
+        android_panel_anim_ = android_panel_visible_ ? 1.0f : 0.0f;
+    }
+    if (android_panel_anim_ <= 0.0f) return;
+
+    float scale = (float)frame_dst_w_ / phone_frame_.frame_width();
+    int svx = frame_dst_x_ + (int)(phone_frame_.screen_x() * scale);
+    int svy = frame_dst_y_ + (int)(phone_frame_.screen_y() * scale);
+    int svw = (int)(phone_frame_.screen_width() * scale);
+    int svh = (int)(phone_frame_.screen_height() * scale);
+
+    int panel_w = (int)(svw * 0.85f);
+    int pad     = std::max(10, panel_w / 22);
+    int label_h = std::max(14, panel_w / 26);
+    int field_h = std::max(28, panel_w / 12);
+    int btn_h   = std::max(28, panel_w / 11);
+    int gap     = std::max(6, pad / 2);
+
+    int title_h = std::max(20, panel_w / 16);
+    int total_h = pad + title_h + gap*2
+                + (label_h + 2 + field_h + gap) * 3
+                + label_h + gap                          // status line
+                + btn_h + pad;
+
+    int panel_x = svx + (svw - panel_w) / 2;
+    int panel_y = svy + (svh - total_h) / 2;
+    int slide_off = (int)((1.0f - android_panel_anim_) * 30);
+    panel_y -= slide_off;
+    uint8_t alpha = (uint8_t)(245 * android_panel_anim_);
+    uint8_t text_alpha = (uint8_t)(255 * android_panel_anim_);
+
+    android_panel_rect_ = {panel_x, panel_y, panel_w, total_h};
+
+    // Rounded background — same recipe as info panel
+    int pr = std::max(8, pad / 2);
+    SDL_SetRenderDrawColor(sdl_renderer_, 30, 30, 34, alpha);
+    SDL_Rect body = {panel_x + pr, panel_y, panel_w - pr*2, total_h};
+    SDL_RenderFillRect(sdl_renderer_, &body);
+    SDL_Rect ls = {panel_x, panel_y + pr, pr, total_h - pr*2};
+    SDL_RenderFillRect(sdl_renderer_, &ls);
+    SDL_Rect rs = {panel_x + panel_w - pr, panel_y + pr, pr, total_h - pr*2};
+    SDL_RenderFillRect(sdl_renderer_, &rs);
+    fill_circle(sdl_renderer_, panel_x + pr, panel_y + pr, pr);
+    fill_circle(sdl_renderer_, panel_x + panel_w - pr, panel_y + pr, pr);
+    fill_circle(sdl_renderer_, panel_x + pr, panel_y + total_h - pr, pr);
+    fill_circle(sdl_renderer_, panel_x + panel_w - pr, panel_y + total_h - pr, pr);
+
+    int cy = panel_y + pad;
+
+    // Title
+    {
+        int tw = 0, th = 0;
+        SDL_Texture* tex = make_text_texture(sdl_renderer_, "Add Android phone",
+            title_h, 235, 235, 240, &tw, &th);
+        if (tex) {
+            int dx = panel_x + (panel_w - tw) / 2;
+            SDL_Rect d = {dx, cy, tw, th};
+            SDL_SetTextureAlphaMod(tex, text_alpha);
+            SDL_RenderCopy(sdl_renderer_, tex, nullptr, &d);
+            SDL_DestroyTexture(tex);
+        }
+        cy += title_h + gap*2;
+    }
+
+    // Close button (small × top-right)
+    {
+        int sz = title_h;
+        android_close_btn_ = {panel_x + panel_w - sz - pad/2, panel_y + pad/2, sz, sz};
+        int tw=0, th=0;
+        SDL_Texture* tex = make_text_texture(sdl_renderer_, "x", sz, 200, 200, 200, &tw, &th);
+        if (tex) {
+            SDL_Rect d = {android_close_btn_.x + (sz-tw)/2,
+                          android_close_btn_.y + (sz-th)/2, tw, th};
+            SDL_SetTextureAlphaMod(tex, text_alpha);
+            SDL_RenderCopy(sdl_renderer_, tex, nullptr, &d);
+            SDL_DestroyTexture(tex);
+        }
+    }
+
+    // Helper for one labeled field
+    auto draw_field = [&](int idx, const char* label, const std::string& val,
+                          const char* placeholder) {
+        int tw=0, th=0;
+        SDL_Texture* lab = make_text_texture(sdl_renderer_, label, label_h,
+            170, 170, 180, &tw, &th);
+        if (lab) {
+            SDL_Rect d = {panel_x + pad, cy, tw, th};
+            SDL_SetTextureAlphaMod(lab, text_alpha);
+            SDL_RenderCopy(sdl_renderer_, lab, nullptr, &d);
+            SDL_DestroyTexture(lab);
+        }
+        cy += label_h + 2;
+
+        SDL_Rect fr = {panel_x + pad, cy, panel_w - pad*2, field_h};
+        android_field_rects_[idx] = {fr.x, fr.y, fr.w, fr.h};
+
+        bool focused = (android_focus_ == idx);
+        // Field background
+        SDL_SetRenderDrawColor(sdl_renderer_, focused ? 55 : 45,
+                                              focused ? 55 : 45,
+                                              focused ? 65 : 50, alpha);
+        SDL_RenderFillRect(sdl_renderer_, &fr);
+        // Border
+        SDL_SetRenderDrawColor(sdl_renderer_,
+            focused ? 110 : 70, focused ? 150 : 70, focused ? 220 : 80, alpha);
+        SDL_RenderDrawRect(sdl_renderer_, &fr);
+
+        // Text
+        std::string display = val.empty() ? std::string(placeholder) : val;
+        bool is_placeholder = val.empty();
+        int vt_w=0, vt_h=0;
+        int font_h = field_h - 10;
+        SDL_Texture* vt = make_text_texture(sdl_renderer_, display, font_h,
+            is_placeholder ? 110 : 235,
+            is_placeholder ? 110 : 235,
+            is_placeholder ? 120 : 240, &vt_w, &vt_h);
+        if (vt) {
+            SDL_Rect d = {fr.x + 8, fr.y + (fr.h - vt_h)/2, vt_w, vt_h};
+            SDL_SetTextureAlphaMod(vt, text_alpha);
+            SDL_RenderCopy(sdl_renderer_, vt, nullptr, &d);
+            SDL_DestroyTexture(vt);
+        }
+        // Cursor
+        if (focused) {
+            using namespace std::chrono;
+            auto now = steady_clock::now();
+            auto ms = duration_cast<milliseconds>(now.time_since_epoch()).count();
+            if ((ms / 500) % 2 == 0) {
+                int cx = fr.x + 8 + (is_placeholder ? 0 : vt_w) + 1;
+                SDL_SetRenderDrawColor(sdl_renderer_, 220, 220, 230, text_alpha);
+                SDL_Rect cur = {cx, fr.y + 6, 2, fr.h - 12};
+                SDL_RenderFillRect(sdl_renderer_, &cur);
+            }
+        }
+        cy += field_h + gap;
+    };
+
+    draw_field(0, "IP address",      android_ip_,   "192.168.1.42");
+    draw_field(1, "Pair port",       android_port_, "42379");
+    draw_field(2, "Pairing code",    android_pin_,  "123456");
+
+    // Status line
+    {
+        std::string s;
+        bool err = false;
+        {
+            std::lock_guard lk(android_status_mutex_);
+            s = android_status_;
+            err = android_status_is_error_;
+        }
+        if (!s.empty()) {
+            int tw=0, th=0;
+            SDL_Texture* tex = make_text_texture(sdl_renderer_, s, label_h,
+                err ? 230 : 140, err ? 110 : 200, err ? 110 : 140, &tw, &th);
+            if (tex) {
+                int max_w = panel_w - pad*2;
+                int dw = std::min(tw, max_w);
+                SDL_Rect d = {panel_x + pad, cy, dw, th};
+                SDL_SetTextureAlphaMod(tex, text_alpha);
+                SDL_RenderCopy(sdl_renderer_, tex, nullptr, &d);
+                SDL_DestroyTexture(tex);
+            }
+        }
+        cy += label_h + gap;
+    }
+
+    // Buttons
+    int bw = (panel_w - pad*2 - gap) / 2;
+    android_connect_btn_    = {panel_x + pad,           cy, bw, btn_h};
+    android_disconnect_btn_ = {panel_x + pad + bw + gap, cy, bw, btn_h};
+
+    auto draw_btn = [&](const BtnRect& r, const char* label, bool primary) {
+        SDL_SetRenderDrawColor(sdl_renderer_,
+            primary ? 60 : 50, primary ? 110 : 50, primary ? 200 : 55, alpha);
+        SDL_Rect br = {r.x, r.y, r.w, r.h};
+        SDL_RenderFillRect(sdl_renderer_, &br);
+        SDL_SetRenderDrawColor(sdl_renderer_,
+            primary ? 110 : 90, primary ? 150 : 90, primary ? 230 : 100, alpha);
+        SDL_RenderDrawRect(sdl_renderer_, &br);
+        int tw=0, th=0;
+        SDL_Texture* tex = make_text_texture(sdl_renderer_, label, btn_h - 12,
+            240, 240, 245, &tw, &th);
+        if (tex) {
+            SDL_Rect d = {r.x + (r.w-tw)/2, r.y + (r.h-th)/2, tw, th};
+            SDL_SetTextureAlphaMod(tex, text_alpha);
+            SDL_RenderCopy(sdl_renderer_, tex, nullptr, &d);
+            SDL_DestroyTexture(tex);
+        }
+    };
+    draw_btn(android_connect_btn_,    android_busy_ ? "Working..." : "Connect", true);
+    draw_btn(android_disconnect_btn_, "Disconnect", false);
 }
 
 void Renderer::take_screenshot() {
