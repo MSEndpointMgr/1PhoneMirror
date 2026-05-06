@@ -3,6 +3,9 @@
 #include <openmirror/log_buffer.h>
 #include <openmirror/network/tcp_server.h>
 #include <openmirror/airplay/srp_pin.h>
+#ifdef ENABLE_ANDROID
+#include <openmirror/android/scrcpy_receiver.h>
+#endif
 #include <iostream>
 #include <string>
 
@@ -154,7 +157,14 @@ void print_usage(const char* argv0) {
               << "  --height <pixels>  Window height (default: 720)\n"
               << "  --no-airplay       Disable AirPlay (iOS) receiver\n"
               << "  --no-miracast      Disable Miracast (Android) receiver\n"
+              << "  --no-android       Disable Android (scrcpy) receiver\n"
               << "  --airplay-pin      Require on-screen PIN for AirPlay (managed iOS)\n"
+              << "\nAndroid (scrcpy) options:\n"
+              << "  --android-pair <ip:port> <code>   One-time pair via Wireless Debugging\n"
+              << "  --android-connect <ip:port>       Connect to a paired device, then exit\n"
+              << "  --android-device <serial>         Force a specific device serial\n"
+              << "  --android-jar <path>              Path to scrcpy-server.jar\n"
+              << "  --android-adb <path>              Path to adb.exe\n"
               << "  --help             Show this help\n";
 }
 
@@ -189,6 +199,33 @@ int main(int argc, char* argv[]) {
             config.enable_airplay = false;
         } else if (arg == "--no-miracast") {
             config.enable_miracast = false;
+        } else if (arg == "--no-android") {
+            config.enable_android = false;
+        } else if (arg == "--android-device" && i + 1 < argc) {
+            config.android_device_serial = argv[++i];
+        } else if (arg == "--android-jar" && i + 1 < argc) {
+            config.android_scrcpy_jar = argv[++i];
+        } else if (arg == "--android-adb" && i + 1 < argc) {
+            config.android_adb_path = argv[++i];
+#ifdef ENABLE_ANDROID
+        } else if (arg == "--android-pair" && i + 2 < argc) {
+            std::string ipport = argv[++i];
+            std::string code   = argv[++i];
+            openmirror::android::AdbController adb;
+            if (!config.android_adb_path.empty()) adb.set_adb_path(config.android_adb_path);
+            std::string msg;
+            bool ok = adb.pair(ipport, code, &msg);
+            std::cout << msg;
+            return ok ? 0 : 2;
+        } else if (arg == "--android-connect" && i + 1 < argc) {
+            std::string ipport = argv[++i];
+            openmirror::android::AdbController adb;
+            if (!config.android_adb_path.empty()) adb.set_adb_path(config.android_adb_path);
+            std::string msg;
+            bool ok = adb.connect(ipport, &msg);
+            std::cout << msg;
+            return ok ? 0 : 2;
+#endif
         } else if (arg == "--airplay-pin") {
             config.airplay_require_pin = true;
         } else if (arg == "--srp-self-test") {

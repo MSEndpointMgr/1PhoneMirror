@@ -1,135 +1,162 @@
 # 1PhoneMirror
 
-An open-source screen mirroring receiver for Windows that supports both **AirPlay** (iOS/macOS) and **Miracast** (Android) using native device casting — no apps needed on the mobile device.
+An open-source screen-mirroring receiver for Windows that lets an iPhone or
+an Android phone show up inside a phone-shaped window on your PC — no app
+installed on the phone, no cables.
 
-## Features
+- **iOS / iPadOS / macOS** — native AirPlay (Screen Mirroring), with optional PIN pairing.
+- **Android** — Wireless Debugging via the bundled `adb` + `scrcpy-server.jar`.
+- **Miracast** — Wi-Fi Direct receiver (experimental, Windows-only).
 
-- **AirPlay 2 Receiver** — iOS and macOS devices can mirror their screen via the native Screen Mirroring control
-- **Miracast Receiver** — Android devices can cast via the built-in "Cast" / "Smart View" / "Screen Mirror" feature
-- **Unified rendering** — Single SDL2 window with GPU-accelerated display
-- **Low latency** — FFmpeg hardware-accelerated H.264/H.265 decoding
-- **Fullscreen** — Press `F` to toggle, `ESC` to quit
-- **Cross-protocol** — Both protocols feed into the same rendering pipeline
+Multiple phones can stay paired at once and appear as small dots in the
+bottom bezel; left-click switches the active source, right-click opens a
+menu to disconnect.
 
 ## Architecture
 
 ```
-iOS (AirPlay)          Android (Miracast/Wi-Fi Display)
-      │                          │
-      ▼                          ▼
-┌─────────────┐         ┌───────────────────┐
-│ mDNS + RTSP │         │ WinRT Miracast API │
-│ FairPlay    │         │ (Wi-Fi Direct)     │
-└──────┬──────┘         └─────────┬─────────┘
-       │                          │
-       ▼                          ▼
-┌──────────────────────────────────────┐
-│     FFmpeg Decoder (H.264/H.265)     │
-├──────────────────────────────────────┤
-│     SDL2 Renderer + Audio Output     │
-└──────────────────────────────────────┘
+                ┌────────────────────────────────────────────┐
+                │             1PhoneMirror.exe               │
+                └────────────────────────────────────────────┘
+                          │            │            │
+        ┌─────────────────┘            │            └─────────────────┐
+        ▼                              ▼                              ▼
+┌────────────────┐         ┌────────────────────┐         ┌──────────────────────┐
+│  AirPlay 2     │         │  Android (scrcpy)  │         │  Miracast (WinRT)    │
+│  RTSP + mDNS   │         │  ADB pair/connect  │         │  Wi-Fi Direct        │
+│  FairPlay AES  │         │  scrcpy v3 stream  │         │  Wi-Fi Display       │
+└───────┬────────┘         └─────────┬──────────┘         └──────────┬───────────┘
+        │ H.264 / AAC                │ H.264 (Annex-B)               │ H.264
+        └────────────────────────────┼───────────────────────────────┘
+                                     ▼
+                       ┌──────────────────────────┐
+                       │  FFmpeg decode (sw/hw)   │  YUV → RGBA
+                       └─────────────┬────────────┘
+                                     ▼
+                       ┌──────────────────────────┐
+                       │   SDL2 renderer          │  phone frame, island
+                       │   + Win32 GDI text       │  menu, log viewer,
+                       │   + audio output         │  source dots, panels
+                       └──────────────────────────┘
 ```
+
+Source layout:
+
+| Path | Contents |
+|------|----------|
+| `src/airplay/` | mDNS service, RTSP server, AirPlay mirror session, FairPlay |
+| `src/android/` | `AdbController` (Win32 process pipes), scrcpy v3 stream receiver, in-app pair/connect dialog |
+| `src/miracast/` | WinRT Miracast receiver |
+| `src/media/` | FFmpeg decoder, SDL2 renderer, audio output, phone-frame overlay |
+| `src/network/` | TCP / RTSP plumbing |
+| `src/app.cpp` | Wires sources to renderer, owns lifecycle |
+| `tools/adb/` | Bundled platform-tools `adb.exe` (staged at build time) |
+| `tools/scrcpy-server.jar` | scrcpy v3.0 server, pushed to the phone over ADB |
 
 ## Prerequisites
 
-- **Windows 10/11** (Miracast requires Windows 10 1903+)
-- **Visual Studio 2022** with C++ Desktop workload (or Build Tools)
-- **CMake** 3.20+
-- **vcpkg** (for dependency management)
-- **Bonjour SDK** (for AirPlay mDNS — optional)
+- Windows 10 1903+ (Miracast) / Windows 11 recommended
+- Visual Studio 2022 with the C++ Desktop workload (or the Build Tools)
+- CMake 3.20+
+- vcpkg (the build script uses `$env:VCPKG_ROOT` or `%USERPROFILE%\vcpkg`)
 
-## Quick Start
-
-### 1. Install Dependencies
+## Build
 
 ```powershell
-.\scripts\setup_deps.ps1
-```
-
-This installs via vcpkg:
-- FFmpeg (libavcodec, libavformat, libswscale, libswresample)
-- SDL2
-- OpenSSL
-
-### 2. Build
-
-```powershell
+.\scripts\setup_deps.ps1   # one-time vcpkg install of FFmpeg, SDL2, OpenSSL
 .\scripts\build.ps1
-
-# Or manually:
-mkdir build; cd build
-cmake .. -DCMAKE_TOOLCHAIN_FILE="$env:USERPROFILE\vcpkg\scripts\buildsystems\vcpkg.cmake"
-cmake --build . --config Release
+.\build\Release\1PhoneMirror.exe
 ```
 
-### 3. Run
+The build script also stages `tools\adb\adb.exe` and `tools\scrcpy-server.jar`
+into `build\Release\tools\` so the Android receiver works out of the box.
+
+## Connecting a phone
+
+### iPhone / iPad / Mac (AirPlay)
+1. PC and phone on the **same Wi-Fi**.
+2. Phone: **Control Center → Screen Mirroring → 1PhoneMirror**.
+3. If PIN pairing is enabled, type the PIN shown on the PC.
+
+### Android (Wireless Debugging)
+1. Phone: **Settings → Developer options → Wireless debugging** → enable.
+2. Tap **Pair device with pairing code** — note the **IP : port** and **6-digit code**.
+3. PC: in 1PhoneMirror press **A** — the dialog pre-fills your PC's `/24`
+   subnet (e.g. `192.168.0.`); type the phone's last octet, the pair port,
+   and the PIN, then **Connect**. The phone shows up via mDNS within a
+   second or two and starts mirroring.
+
+A new pairing code is required each time the pair-with-code screen is
+opened. Once paired, the device serial sticks until you forget it on
+the phone.
+
+### Miracast (Android, experimental)
+1. PC: leave Miracast enabled (default).
+2. Phone: **Quick Settings → Cast / Smart View / Screen Cast** → pick the PC.
+
+## Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `F` | Toggle fullscreen |
+| `M` | Toggle island menu |
+| `L` | Toggle log viewer |
+| `A` | Open Android pair / connect dialog |
+| `I` | Toggle info panel |
+| `V` | Toggle version history |
+| `P` | Toggle phone-frame overlay |
+| `Ctrl+S` | Screenshot to clipboard + Pictures folder |
+| `Esc` | Close panel / quit |
+
+## Command-line options
+
+```
+--name <name>                     Display name shown to phones (default: 1PhoneMirror)
+--width <px>                      Window width (default: 1280)
+--height <px>                     Window height (default: 720)
+--no-airplay                      Disable the AirPlay receiver
+--no-miracast                     Disable the Miracast receiver
+--no-android                      Disable the Android (scrcpy) receiver
+--android-pair <ip:port> <code>   One-shot: pair with Wireless debugging then exit
+--android-connect <ip:port>       One-shot: connect to a paired device then exit
+--android-device <serial>         Auto-start streaming this device on launch
+--android-jar <path>              Override path to scrcpy-server.jar
+--android-adb <path>              Override path to adb.exe
+```
+
+## Packaging (MSI installer)
 
 ```powershell
-.\build\Release\1phonemirror.exe --name "My PC"
+.\package.ps1   # uses WiX Toolset 4 — produces dist\1PhoneMirror-<ver>.msi
 ```
 
-### Command Line Options
+The version string is auto-derived from `src/media/renderer.cpp` and bumped
+in lockstep with `CMakeLists.txt`.
 
-| Option | Description |
-|--------|-------------|
-| `--name <name>` | Display name shown on mobile devices (default: 1PhoneMirror) |
-| `--width <px>` | Window width (default: 1280) |
-| `--height <px>` | Window height (default: 720) |
-| `--no-airplay` | Disable AirPlay (iOS) receiver |
-| `--no-miracast` | Disable Miracast (Android) receiver |
+## Project status
 
-## Connecting Devices
+| Component | State |
+|-----------|-------|
+| AirPlay 2 — RTSP + mDNS + FairPlay + multi-source | Working |
+| AirPlay PIN pairing | Working |
+| Android — ADB pair/connect + scrcpy v3 stream | Working |
+| Miracast — WinRT receiver | Experimental |
+| Hardware-accelerated decode (DXVA2 / D3D11VA) | Planned |
+| System tray + autostart | Planned |
+| Touch input forwarding (Miracast UIBC) | Planned |
 
-### iOS / macOS (AirPlay)
-1. Ensure your iPhone/iPad/Mac and PC are on the **same Wi-Fi network**
-2. Open **Control Center** → tap **Screen Mirroring**
-3. Select your PC's name from the list
-
-### Android (Miracast)
-1. Open **Settings** → **Connected Devices** → **Cast** (or use Quick Settings tile)
-2. Your PC will appear as a wireless display target
-3. Tap to connect
-
-## Project Status
-
-This is a **scaffold/kickstart project**. Here's what works and what needs work:
-
-### Working
-- [x] Project structure and CMake build system
-- [x] FFmpeg video decoder pipeline (H.264 → RGBA)
-- [x] SDL2 renderer with aspect-ratio preservation and fullscreen
-- [x] Audio output via SDL2
-- [x] TCP/RTSP server framework
-- [x] AirPlay mDNS service advertisement
-- [x] AirPlay RTSP control channel (session lifecycle)
-- [x] AirPlay mirror data receiver (frame parsing)
-- [x] Miracast receiver via WinRT API
-- [x] Dependency setup and build scripts
-
-### TODO — Critical Path
-- [ ] **FairPlay handshake** — Port the `lib/playfair` crypto from [UxPlay](https://github.com/antimof/UxPlay). Without this, modern iOS devices won't complete the AirPlay connection. This is the single biggest piece of work.
-- [ ] **Binary plist handling** — AirPlay `/info` and `/server-info` endpoints need proper binary plist responses. Use a plist library or port from UxPlay.
-- [ ] **Stream decryption** — After FairPlay handshake, the mirror stream is AES-encrypted. Decryption keys come from the handshake.
-- [ ] **Miracast frame extraction** — The WinRT `MiracastReceiver` API handles the protocol, but extracting raw video frames for custom rendering needs the `MediaFrameReader` integration.
-
-### TODO — Nice to Have
-- [ ] Hardware-accelerated decoding (DXVA2 / D3D11VA)
-- [ ] System tray icon with auto-start
-- [ ] Audio-only AirPlay (Spotify/music streaming to PC speakers)
-- [ ] Multiple simultaneous connections
-- [ ] PIN/password protection
-- [ ] Touch input forwarding (Miracast UIBC)
-
-## Key References
+## References
 
 | Resource | What it provides |
-|----------|-----------------|
-| [UxPlay](https://github.com/antimof/UxPlay) | Complete AirPlay 2 receiver — FairPlay crypto, stream handling |
+|----------|------------------|
+| [UxPlay](https://github.com/antimof/UxPlay) | AirPlay 2 receiver — FairPlay crypto, stream handling |
 | [RPiPlay](https://github.com/FD-/RPiPlay) | Simpler AirPlay receiver — good FairPlay reference |
-| [MiracleCast](https://github.com/nicman23/miraclecast) | Linux Miracast — protocol reference |
+| [scrcpy](https://github.com/Genymobile/scrcpy) | The server-side JAR pushed to Android devices |
 | [Windows.Media.Miracast](https://learn.microsoft.com/en-us/uwp/api/windows.media.miracast) | WinRT Miracast API docs |
 | [Bonjour SDK](https://developer.apple.com/bonjour/) | DNS-SD for AirPlay discovery on Windows |
 
 ## License
 
-MIT License — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
+The bundled `scrcpy-server.jar` is licensed under Apache 2.0 (see the scrcpy
+project), and `adb.exe` ships under the Android Open Source Project licenses.
