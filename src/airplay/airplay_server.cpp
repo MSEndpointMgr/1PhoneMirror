@@ -441,9 +441,10 @@ network::RtspResponse AirPlayServer::handle_pair_setup_pin(const network::RtspRe
             return resp;
         }
 
-        // SRP username "I" is hardcoded to "Pair-Setup" per AirPlay 1 spec;
-        // the "user" field in the bplist is just the device MAC (metadata).
-        if (!srp_pin_.start(current_pin_)) {
+        // Per AirPlay 1 PIN spec, the SRP username "I" is the per-pairing
+        // identifier iOS sends in the "user" field (e.g. device MAC string),
+        // NOT the literal "Pair-Setup". Using the wrong I causes M1 mismatch.
+        if (!srp_pin_.start(current_pin_, user)) {
             std::cerr << "[AirPlay] SRP start failed\n";
             resp.status_code = 500;
             return resp;
