@@ -2016,6 +2016,7 @@ void Renderer::set_pin_code(const std::string& pin) {
 }
 
 void Renderer::draw_pin_overlay() {
+    if (!sdl_renderer_ || !window_) return;
     std::string pin;
     {
         std::lock_guard<std::mutex> lk(pin_mutex_);

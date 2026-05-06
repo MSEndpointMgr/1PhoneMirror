@@ -65,24 +65,38 @@ bool AirPlayServer::start(const Config& config) {
     // Register RTSP handlers for AirPlay control
     // AirPlay uses non-standard RTSP methods
     rtsp_.on_method("GET", [this](const auto& req) { return handle_info(req); });
-    rtsp_.on_method("POST", [this](const auto& req) {
-        // Route POST based on URI — order matters: more-specific paths first.
-        if (req.uri.find("/pair-pin-start") != std::string::npos)
-            return handle_pair_pin_start(req);
-        if (req.uri.find("/pair-setup-pin") != std::string::npos)
-            return handle_pair_setup_pin(req);
-        if (req.uri.find("/pair-setup") != std::string::npos)
-            return handle_pair_setup(req);
-        if (req.uri.find("/pair-verify") != std::string::npos)
-            return handle_pair_verify(req);
-        if (req.uri.find("/fp-setup") != std::string::npos)
-            return handle_fp_setup(req);
-        if (req.uri.find("/feedback") != std::string::npos) {
+    rtsp_.on_method("POST", [this](const auto& req) -> network::RtspResponse {
+        try {
+            // Route POST based on URI — order matters: more-specific paths first.
+            if (req.uri.find("/pair-pin-start") != std::string::npos)
+                return handle_pair_pin_start(req);
+            if (req.uri.find("/pair-setup-pin") != std::string::npos)
+                return handle_pair_setup_pin(req);
+            if (req.uri.find("/pair-setup") != std::string::npos)
+                return handle_pair_setup(req);
+            if (req.uri.find("/pair-verify") != std::string::npos)
+                return handle_pair_verify(req);
+            if (req.uri.find("/fp-setup") != std::string::npos)
+                return handle_fp_setup(req);
+            if (req.uri.find("/feedback") != std::string::npos) {
+                network::RtspResponse resp;
+                resp.status_code = 200;
+                return resp;
+            }
+            return handle_default(req);
+        } catch (const std::exception& e) {
+            std::cerr << "[AirPlay] EXCEPTION in POST handler (" << req.uri
+                      << "): " << e.what() << "\n";
             network::RtspResponse resp;
-            resp.status_code = 200;
+            resp.status_code = 500;
+            return resp;
+        } catch (...) {
+            std::cerr << "[AirPlay] UNKNOWN EXCEPTION in POST handler ("
+                      << req.uri << ")\n";
+            network::RtspResponse resp;
+            resp.status_code = 500;
             return resp;
         }
-        return handle_default(req);
     });
     rtsp_.on_method("SETUP", [this](const auto& req) { return handle_setup(req); });
     rtsp_.on_method("RECORD", [this](const auto& req) {
