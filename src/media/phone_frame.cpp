@@ -48,16 +48,31 @@ bool PhoneFrame::generate(SDL_Renderer* renderer, int screen_w, int screen_h) {
     // We make bezels slightly thicker for visual clarity on screen
     float aspect = static_cast<float>(screen_h) / screen_w;
     bool is_portrait = aspect > 1.0f;
+    // A tablet (iPad) has an aspect ratio close to 4:3 (1.33) — much less
+    // elongated than a phone (~2.16). Use a different bezel style for those:
+    // thin uniform bezels, small corner radius, NO dynamic island, no side
+    // buttons. Threshold of 1.6 separates iPad-like (≤1.6) from phone-like.
+    float long_over_short = is_portrait ? aspect : (1.0f / aspect);
+    bool is_tablet = long_over_short < 1.6f;
+    is_tablet_ = is_tablet;
 
     int short_side = is_portrait ? screen_w : screen_h;
 
-    // Bezel proportions relative to shorter screen dimension
-    bezel_side_ = std::max(8, static_cast<int>(short_side * 0.028f));
-    bezel_top_ = std::max(12, static_cast<int>(short_side * 0.042f));
-    bezel_bottom_ = std::max(12, static_cast<int>(short_side * 0.042f));
+    if (is_tablet) {
+        // iPad: thin uniform bezels (~1.5% of short side), small corners (~3%)
+        bezel_side_ = std::max(8, static_cast<int>(short_side * 0.025f));
+        bezel_top_ = bezel_side_;
+        bezel_bottom_ = bezel_side_;
+        corner_radius_ = std::max(12, static_cast<int>(short_side * 0.045f));
+    } else {
+        // Bezel proportions relative to shorter screen dimension
+        bezel_side_ = std::max(8, static_cast<int>(short_side * 0.028f));
+        bezel_top_ = std::max(12, static_cast<int>(short_side * 0.042f));
+        bezel_bottom_ = std::max(12, static_cast<int>(short_side * 0.042f));
 
-    // Corner radius: iPhone has ~55pt corners on a 393pt wide screen ≈ 14%
-    corner_radius_ = std::max(20, static_cast<int>(short_side * 0.11f));
+        // Corner radius: iPhone has ~55pt corners on a 393pt wide screen ≈ 14%
+        corner_radius_ = std::max(20, static_cast<int>(short_side * 0.11f));
+    }
 
     frame_w_ = screen_w_ + bezel_side_ * 2;
     frame_h_ = screen_h_ + bezel_top_ + bezel_bottom_;
@@ -87,27 +102,12 @@ bool PhoneFrame::generate(SDL_Renderer* renderer, int screen_w, int screen_h) {
                               screen_w_ + 2, screen_h_ + 2,
                               screen_corner + 1, 1, SCREEN_BORDER);
 
-    // 5. Dynamic Island (pill shape at top center)
-    if (is_portrait) {
-        int island_w = std::max(40, static_cast<int>(screen_w_ * 0.28f));
-        int island_h = std::max(12, static_cast<int>(island_w * 0.30f));
-        int island_cx = frame_w_ / 2;
-        int island_cy = bezel_top_ + std::max(8, static_cast<int>(screen_h_ * 0.018f)) + island_h / 2;
-        draw_pill(frame_pixels_, frame_w_, frame_h_,
-                  island_cx, island_cy, island_w, island_h, ISLAND_COLOR);
-    } else {
-        // Landscape: island on the left side of screen area
-        int island_w = std::max(40, static_cast<int>(screen_h_ * 0.28f));
-        int island_h = std::max(12, static_cast<int>(island_w * 0.30f));
-        int island_cx = bezel_side_ + std::max(8, static_cast<int>(screen_w_ * 0.018f)) + island_w / 2;
-        int island_cy = frame_h_ / 2;
-        // Rotate: swap w/h for vertical pill
-        draw_pill(frame_pixels_, frame_w_, frame_h_,
-                  island_cx, island_cy, island_h, island_w, ISLAND_COLOR);
-    }
+    // 5. Dynamic Island — intentionally omitted. The mirrored video already
+    //    occupies the full screen area; painting a pill on top would obscure
+    //    real content (clock/widgets on iPad, status bar on iPhone).
 
     // 6. Side buttons (power button on right, volume on left)
-    if (is_portrait) {
+    if (!is_tablet && is_portrait) {
         int btn_w = std::max(3, bezel_side_ / 4);
         // Power button (right side, upper-middle)
         int pwr_h = std::max(20, static_cast<int>(screen_h_ * 0.065f));

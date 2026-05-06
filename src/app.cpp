@@ -60,6 +60,21 @@ bool App::init(const Config& config) {
             renderer_.set_pin_code(pin);
         });
 
+        // Multi-source picker wiring
+        renderer_.set_source_provider(
+            [this]() {
+                std::vector<media::Renderer::SourceEntry> out;
+                for (auto& s : airplay_.list_sources())
+                    out.push_back({s.id, s.name, s.active, s.streaming});
+                return out;
+            },
+            [this](const std::string& id) {
+                airplay_.set_active_source(id);
+            },
+            [this](const std::string& id) {
+                airplay_.disconnect_source(id);
+            });
+
         if (airplay_.start(ap_config)) {
             std::cout << "[App] AirPlay receiver active (iOS)\n";
         } else {

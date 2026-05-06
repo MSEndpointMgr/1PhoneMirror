@@ -28,12 +28,22 @@ void RtspServer::set_default_handler(RtspHandler handler) {
 void RtspServer::handle_client(socket_t client, const std::string& addr) {
     std::cout << "[RTSP] Session started with " << addr << "\n";
 
+    // Track this socket so disconnect_ip() can close it.
+    std::string ip = addr;
+    auto colon = ip.find(':');
+    if (colon != std::string::npos) ip = ip.substr(0, colon);
+    {
+        std::lock_guard lock(clients_mutex_);
+        clients_by_ip_.emplace(ip, client);
+    }
+
     while (true) {
         RtspRequest req = parse_request(client);
         if (req.method.empty()) {
             std::cout << "[RTSP] Client disconnected: " << addr << "\n";
             break;
         }
+        req.client_addr = addr;
 
         std::cout << "[RTSP] " << req.method << " " << req.uri
                   << " CSeq=" << req.cseq << "\n";
@@ -57,7 +67,31 @@ void RtspServer::handle_client(socket_t client, const std::string& addr) {
         }
     }
 
+    {
+        std::lock_guard lock(clients_mutex_);
+        auto range = clients_by_ip_.equal_range(ip);
+        for (auto it = range.first; it != range.second; ++it) {
+            if (it->second == client) {
+                clients_by_ip_.erase(it);
+                break;
+            }
+        }
+    }
     TcpServer::close_socket(client);
+}
+
+void RtspServer::disconnect_ip(const std::string& ip) {
+    std::vector<socket_t> to_close;
+    {
+        std::lock_guard lock(clients_mutex_);
+        auto range = clients_by_ip_.equal_range(ip);
+        for (auto it = range.first; it != range.second; ++it)
+            to_close.push_back(it->second);
+    }
+    for (socket_t s : to_close) {
+        std::cout << "[RTSP] Forcing disconnect of client " << ip << "\n";
+        TcpServer::close_socket(s);
+    }
 }
 
 RtspRequest RtspServer::parse_request(socket_t client) {

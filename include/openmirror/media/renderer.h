@@ -4,6 +4,7 @@
 #include <openmirror/media/phone_frame.h>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -31,6 +32,23 @@ public:
 
     // PIN overlay (used by AirPlay PIN pairing). Pass an empty string to clear.
     void set_pin_code(const std::string& pin);
+
+    // ---- Multi-source picker ----
+    struct SourceEntry {
+        std::string id;
+        std::string name;
+        bool active = false;
+        bool streaming = false;
+    };
+    using GetSourcesFn = std::function<std::vector<SourceEntry>()>;
+    using SetActiveFn = std::function<void(const std::string& id)>;
+    using DisconnectFn = std::function<void(const std::string& id)>;
+    void set_source_provider(GetSourcesFn get, SetActiveFn set,
+                             DisconnectFn disc = {}) {
+        get_sources_fn_ = std::move(get);
+        set_active_source_fn_ = std::move(set);
+        disconnect_source_fn_ = std::move(disc);
+    }
 
 private:
     void render_frame();
@@ -82,6 +100,24 @@ private:
     int resize_start_w_ = 0, resize_start_h_ = 0;
     BtnRect resize_grip_;
 
+    // Source picker (small numbered dots in bottom bezel)
+    GetSourcesFn get_sources_fn_;
+    SetActiveFn set_active_source_fn_;
+    DisconnectFn disconnect_source_fn_;
+    std::vector<std::pair<std::string, BtnRect>> source_btns_;
+    // Right-click popup menu over any bezel button.
+    // target is a string id: "menu", "log", or "src:<source-id>".
+    bool bezel_menu_visible_ = false;
+    std::string bezel_menu_target_;
+    int bezel_menu_anchor_x_ = 0;
+    int bezel_menu_anchor_y_ = 0;
+    // (action_id, hit-rect) pairs computed during draw, consumed by clicks.
+    std::vector<std::pair<std::string, BtnRect>> bezel_menu_items_;
+    // Slide-in animation, matching info/version panels (200 ms ease-out).
+    float bezel_menu_anim_ = 0.0f;
+    bool bezel_menu_animating_ = false;
+    std::chrono::steady_clock::time_point bezel_menu_anim_start_;
+
     // Button flash
     bool btn_flash_ = false;
     std::chrono::steady_clock::time_point btn_flash_start_;
@@ -98,6 +134,20 @@ private:
     SDL_Texture* tooltip_tex_ = nullptr;
     int tooltip_tex_w_ = 0, tooltip_tex_h_ = 0;
     int last_tooltip_btn_ = -1;
+
+    // Hover delay (1 second) for tooltips. Tracks which UI key (string id)
+    // is currently hovered and when that hover started.
+    std::string hover_key_;
+    std::chrono::steady_clock::time_point hover_start_;
+    // Returns true if the cursor has been hovering `key` for at least 1s.
+    bool tooltip_ready(const std::string& key);
+    // Draw a small tooltip pill near (anchor_x, anchor_y). The tip is drawn
+    // above the anchor unless it would clip the window top.
+    void draw_bezel_tooltip(const std::string& text, int anchor_x, int anchor_y);
+    SDL_Texture* bezel_tip_tex_ = nullptr;
+    int bezel_tip_w_ = 0, bezel_tip_h_ = 0;
+    std::string bezel_tip_str_;
+    int bezel_tip_font_h_ = 0;
 
     // Logo texture (loaded from PNG)
     SDL_Texture* logo_texture_ = nullptr;

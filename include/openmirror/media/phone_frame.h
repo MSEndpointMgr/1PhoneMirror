@@ -41,6 +41,10 @@ public:
     int bezel_bottom_size() const { return bezel_bottom_; }
     int corner_radius() const { return corner_radius_; }
 
+    // True if last generate() detected a tablet aspect ratio (used by UI to
+    // keep overlays from scaling up on iPad-shaped frames).
+    bool is_tablet() const { return is_tablet_; }
+
     // Composite screenshot: video frame pixels + phone frame with alpha.
     // Returns RGBA pixel buffer (caller must free with delete[]).
     // out_w/out_h receive the image dimensions.
@@ -72,6 +76,7 @@ private:
     int bezel_top_ = 0;
     int bezel_bottom_ = 0;
     int corner_radius_ = 0;
+    bool is_tablet_ = false;
 };
 
 } // namespace openmirror::media

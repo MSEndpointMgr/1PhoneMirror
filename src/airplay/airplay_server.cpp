@@ -1,6 +1,7 @@
 #include <openmirror/airplay/airplay_server.h>
 #include <openmirror/airplay/bplist.h>
 #include <openmirror/config.h>
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -15,6 +16,114 @@ extern "C" {
 }
 
 namespace openmirror::airplay {
+
+// ---- Multi-source helpers ------------------------------------------------
+
+std::string AirPlayServer::ip_from_addr(const std::string& addr) {
+    auto colon = addr.find(':');
+    return (colon == std::string::npos) ? addr : addr.substr(0, colon);
+}
+
+AirPlayServer::MirrorSource*
+AirPlayServer::get_or_create_source_locked(const std::string& ip) {
+    auto it = sources_.find(ip);
+    if (it != sources_.end()) return it->second.get();
+    auto src = std::make_unique<MirrorSource>();
+    src->id = ip;
+    src->number = next_source_number_++;
+    src->name = "Device " + std::to_string(src->number);
+    src->buffer = std::make_unique<MirrorBuffer>();
+    src->video_decoder = std::make_unique<media::Decoder>();
+    if (!src->video_decoder->init_video(AV_CODEC_ID_H264)) {
+        std::cerr << "[AirPlay] Failed to init per-source video decoder for "
+                  << ip << "\n";
+    }
+    // Per-source callback only forwards frames if this source is active.
+    std::string src_id = src->id;
+    src->video_decoder->set_video_callback(
+        [this, src_id](media::VideoFrame frame) {
+            bool fwd = false;
+            {
+                std::lock_guard lock(sources_mutex_);
+                fwd = (active_source_id_ == src_id);
+            }
+            if (fwd && on_video_) on_video_(std::move(frame));
+        });
+    auto* p = src.get();
+    sources_.emplace(ip, std::move(src));
+    std::cout << "[AirPlay] New source registered: " << p->name << " (" << ip << ")\n";
+    return p;
+}
+
+std::vector<AirPlayServer::SourceInfo>
+AirPlayServer::snapshot_sources_locked() const {
+    std::vector<SourceInfo> out;
+    out.reserve(sources_.size());
+    // Sort by join order ("Device N" number) rather than IP string order so
+    // the picker dots match the order devices connected.
+    std::vector<const MirrorSource*> ordered;
+    ordered.reserve(sources_.size());
+    for (const auto& [id, s] : sources_) ordered.push_back(s.get());
+    std::sort(ordered.begin(), ordered.end(),
+              [](const MirrorSource* a, const MirrorSource* b) {
+                  return a->number < b->number;
+              });
+    for (const auto* s : ordered) {
+        SourceInfo si;
+        si.id = s->id;
+        si.name = s->name;
+        si.active = (s->id == active_source_id_);
+        si.streaming = (s->mirror_sock != INVALID_SOCK);
+        out.push_back(std::move(si));
+    }
+    return out;
+}
+
+void AirPlayServer::notify_sources_changed_locked() {
+    if (!on_sources_changed_) return;
+    auto snap = snapshot_sources_locked();
+    // Release the lock before invoking the user callback to avoid re-entrancy.
+    auto cb = on_sources_changed_;
+    sources_mutex_.unlock();
+    try { cb(snap); } catch (...) {}
+    sources_mutex_.lock();
+}
+
+std::vector<AirPlayServer::SourceInfo> AirPlayServer::list_sources() {
+    std::lock_guard lock(sources_mutex_);
+    return snapshot_sources_locked();
+}
+
+std::string AirPlayServer::active_source_id() {
+    std::lock_guard lock(sources_mutex_);
+    return active_source_id_;
+}
+
+void AirPlayServer::set_active_source(const std::string& id) {
+    std::lock_guard lock(sources_mutex_);
+    if (active_source_id_ == id) return;
+    if (sources_.find(id) == sources_.end()) return;
+    active_source_id_ = id;
+    std::cout << "[AirPlay] Active source switched to " << id << "\n";
+    notify_sources_changed_locked();
+}
+
+void AirPlayServer::disconnect_source(const std::string& id) {
+    socket_t kick = INVALID_SOCK;
+    {
+        std::lock_guard lock(sources_mutex_);
+        auto it = sources_.find(id);
+        if (it == sources_.end()) return;
+        kick = it->second->mirror_sock;
+        std::cout << "[AirPlay] Disconnect requested for " << id << "\n";
+    }
+    // Close the mirror data socket — the loop will hit stream_end and erase
+    // the source from the registry + notify the picker.
+    if (kick != INVALID_SOCK) network::TcpServer::close_socket(kick);
+    // Also close the RTSP control connection so iOS knows the receiver is
+    // gone and stops the AirPlay session on the device side.
+    rtsp_.disconnect_ip(id);
+}
 
 AirPlayServer::AirPlayServer() = default;
 
@@ -629,52 +738,48 @@ network::RtspResponse AirPlayServer::handle_setup(const network::RtspRequest& re
 
     BPlistWriter writer;
     std::vector<std::pair<int, int>> root_entries;
+    const std::string source_ip = ip_from_addr(req.client_addr);
 
     // Phase 1: Encryption setup (eiv + ekey present)
     std::vector<uint8_t> eiv, ekey;
     if (reader.get_data("eiv", eiv) && reader.get_data("ekey", ekey)) {
-        std::cout << "[AirPlay] SETUP: encryption init (eiv=" << eiv.size()
+        std::cout << "[AirPlay] SETUP from " << source_ip
+                  << ": encryption init (eiv=" << eiv.size()
                   << "B, ekey=" << ekey.size() << "B)\n";
 
         uint64_t timing_rport = 0;
         reader.get_uint("timingPort", timing_rport);
-        std::cout << "[AirPlay] SETUP: client timingPort=" << timing_rport << "\n";
 
         // Try to decrypt the AES stream key via FairPlay
         if (ekey.size() == 72) {
-            std::cout << "[AirPlay] ekey(" << ekey.size() << "): ";
-            for (size_t i = 0; i < ekey.size(); i++)
-                std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)ekey[i];
-            std::cout << "\n[AirPlay] eiv(" << eiv.size() << "): ";
-            for (size_t i = 0; i < eiv.size(); i++)
-                std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)eiv[i];
-            std::cout << std::dec << "\n";
-
-            if (fairplay_.decrypt(ekey.data(), aes_key_)) {
-                // Hash AES key with ECDH shared secret (SHA-512, first 16 bytes), matching UxPlay
+            uint8_t key_buf[16] = {};
+            if (fairplay_.decrypt(ekey.data(), key_buf)) {
+                // Hash AES key with ECDH shared secret (SHA-512, first 16 bytes)
                 uint8_t ecdh_secret[32];
                 if (pairing_.get_ecdh_secret(ecdh_secret)) {
                     uint8_t sha512_out[64];
                     unsigned int sha_len = 0;
                     EVP_MD_CTX* md = EVP_MD_CTX_new();
                     EVP_DigestInit_ex(md, EVP_sha512(), nullptr);
-                    EVP_DigestUpdate(md, aes_key_, 16);
+                    EVP_DigestUpdate(md, key_buf, 16);
                     EVP_DigestUpdate(md, ecdh_secret, 32);
                     EVP_DigestFinal_ex(md, sha512_out, &sha_len);
                     EVP_MD_CTX_free(md);
-                    memcpy(aes_key_, sha512_out, 16);
-                    std::cout << "[AirPlay] AES key hashed with ECDH secret (SHA-512)\n";
+                    memcpy(key_buf, sha512_out, 16);
                 }
-                has_aes_key_ = true;
-                mirror_buffer_.set_aes_key(aes_key_);
-                std::cout << "[AirPlay] FairPlay: AES stream key decrypted OK\n";
+                std::lock_guard lock(sources_mutex_);
+                MirrorSource* src = get_or_create_source_locked(source_ip);
+                memcpy(src->aes_key, key_buf, 16);
+                src->has_aes_key = true;
+                src->buffer->set_aes_key(src->aes_key);
+                std::cout << "[AirPlay] FairPlay AES key decrypted for "
+                          << src->name << "\n";
+                notify_sources_changed_locked();
             } else {
-                std::cout << "[AirPlay] NOTE: FairPlay decrypt failed — "
-                          << "stream will be encrypted\n";
+                std::cout << "[AirPlay] NOTE: FairPlay decrypt failed\n";
             }
         }
 
-        // Respond with our ports
         auto k1 = writer.add_string("eventPort");
         auto v1 = writer.add_uint(event_port_);
         root_entries.push_back({k1, v1});
@@ -682,9 +787,6 @@ network::RtspResponse AirPlayServer::handle_setup(const network::RtspRequest& re
         auto k2 = writer.add_string("timingPort");
         auto v2 = writer.add_uint(timing_port_);
         root_entries.push_back({k2, v2});
-
-        std::cout << "[AirPlay] SETUP response: eventPort=" << event_port_
-                  << " timingPort=" << timing_port_ << "\n";
     }
 
     // Phase 2: Stream setup (streams array present)
@@ -699,10 +801,14 @@ network::RtspResponse AirPlayServer::handle_setup(const network::RtspRequest& re
             std::cout << "\n";
 
             if (s.type == 110) {
-                // Mirror stream — store connection ID and init AES
+                // Mirror stream — store connection ID per-source
                 if (s.stream_connection_id) {
-                    stream_connection_id_ = s.stream_connection_id;
-                    mirror_buffer_.init_aes(stream_connection_id_);
+                    std::lock_guard lock(sources_mutex_);
+                    MirrorSource* src = get_or_create_source_locked(source_ip);
+                    src->stream_connection_id = s.stream_connection_id;
+                    if (src->has_aes_key) {
+                        src->buffer->init_aes(s.stream_connection_id);
+                    }
                 }
                 auto k_dp = writer.add_string("dataPort");
                 auto v_dp = writer.add_uint(config_.mirror_port);
@@ -974,6 +1080,29 @@ void AirPlayServer::mirror_receive_loop() {
     network::TcpServer mirror_server;
     mirror_server.start(config_.mirror_port, [this](socket_t client, const std::string& addr) {
         std::cout << "[AirPlay] Mirror stream connected from " << addr << "\n";
+        const std::string source_ip = ip_from_addr(addr);
+
+        // Identify the source. If a previous mirror connection from the same
+        // device is still open, kick it (one mirror socket per source).
+        socket_t prev_sock = INVALID_SOCK;
+        bool became_active = false;
+        {
+            std::lock_guard lock(sources_mutex_);
+            MirrorSource* src = get_or_create_source_locked(source_ip);
+            prev_sock = src->mirror_sock;
+            src->mirror_sock = client;
+            // First streaming source becomes the active one automatically.
+            if (active_source_id_.empty()) {
+                active_source_id_ = src->id;
+                became_active = true;
+            }
+            notify_sources_changed_locked();
+        }
+        if (prev_sock != INVALID_SOCK) {
+            std::cout << "[AirPlay] Replacing stale mirror socket for " << source_ip << "\n";
+            network::TcpServer::close_socket(prev_sock);
+        }
+        (void)became_active;
 
         int64_t frame_count = 0;
         std::vector<uint8_t> sps_pps;
@@ -981,6 +1110,12 @@ void AirPlayServer::mirror_receive_loop() {
         uint64_t sps_pps_timestamp = 0;
 
         while (running_.load()) {
+            // Bail if our slot was replaced by a newer connection.
+            {
+                std::lock_guard lock(sources_mutex_);
+                auto it = sources_.find(source_ip);
+                if (it == sources_.end() || it->second->mirror_sock != client) break;
+            }
             // Read 128-byte header
             uint8_t header[128] = {};
             int hdr_read = 0;
@@ -1039,38 +1174,23 @@ void AirPlayServer::mirror_receive_loop() {
                     prepend_sps_pps = false;
                 }
 
-                // Decrypt
-                if (mirror_buffer_.is_initialized()) {
-                    decrypted.resize(payload_size);
-                    mirror_buffer_.decrypt(payload.data(), decrypted.data(),
-                                           static_cast<int>(payload_size));
-                } else {
-                    // No decryption available — pass through (will fail to decode)
-                    decrypted = std::move(payload);
+                // Decrypt with this source's per-source MirrorBuffer; grab a
+                // pointer to its decoder so we can decode outside the lock.
+                media::Decoder* dec = nullptr;
+                {
+                    std::lock_guard lock(sources_mutex_);
+                    auto it = sources_.find(source_ip);
+                    if (it == sources_.end()) break; // source vanished
+                    if (it->second->buffer && it->second->buffer->is_initialized()) {
+                        decrypted.resize(payload_size);
+                        it->second->buffer->decrypt(payload.data(), decrypted.data(),
+                                                    static_cast<int>(payload_size));
+                    } else {
+                        decrypted = std::move(payload);
+                    }
+                    dec = it->second->video_decoder.get();
                 }
-
-                // Debug: log first 32 bytes of first few packets
-                if (frame_count < 3) {
-                    std::cout << "[AirPlay] Mirror pkt#" << frame_count
-                              << " type=0x" << std::hex << (int)packet_type
-                              << std::setfill('0') << std::setw(2) << (int)packet_subtype
-                              << std::dec << " size=" << payload_size << " enc: ";
-                    for (int i = 0; i < (std::min)(32, (int)payload_size); i++)
-                        std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)payload[i];
-                    std::cout << "\n[AirPlay]  dec: ";
-                    for (int i = 0; i < (std::min)(32, (int)decrypted.size()); i++)
-                        std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)decrypted[i];
-                    // Show expected first 4 bytes (NAL size = payload_size - 4)
-                    uint32_t expected_nal_size = payload_size - 4;
-                    std::cout << "\n[AirPlay]  expected start: "
-                              << std::hex << std::setfill('0')
-                              << std::setw(2) << ((expected_nal_size >> 24) & 0xFF)
-                              << std::setw(2) << ((expected_nal_size >> 16) & 0xFF)
-                              << std::setw(2) << ((expected_nal_size >> 8) & 0xFF)
-                              << std::setw(2) << (expected_nal_size & 0xFF)
-                              << " 65(IDR) or 61(P) or 06(SEI)";
-                    std::cout << std::dec << "\n";
-                }
+                if (!dec) break;
 
                 // Prepend SPS/PPS if available
                 if (!sps_pps.empty()) {
@@ -1104,11 +1224,10 @@ void AirPlayServer::mirror_receive_loop() {
                 }
 
                 if (!valid) {
-                    // Mark first byte to flag invalid data
                     if (!output_buf.empty()) output_buf[0] = 1;
                 }
 
-                decoder_.decode_video(output_buf.data(), output_buf.size(), frame_count++);
+                dec->decode_video(output_buf.data(), output_buf.size(), frame_count++);
                 break;
             }
 
@@ -1177,7 +1296,7 @@ void AirPlayServer::mirror_receive_loop() {
                 }
 
                 std::cout << "[AirPlay] Mirror: SPS(" << sps_size << ")+PPS("
-                          << pps_size << ") received\n";
+                          << pps_size << ") received from " << source_ip << "\n";
                 break;
             }
 
@@ -1199,6 +1318,31 @@ void AirPlayServer::mirror_receive_loop() {
 
 stream_end:
         std::cout << "[AirPlay] Mirror stream ended (" << frame_count << " frames)\n";
+        bool became_empty = false;
+        {
+            std::lock_guard lock(sources_mutex_);
+            auto it = sources_.find(source_ip);
+            if (it != sources_.end() && it->second->mirror_sock == client) {
+                bool was_active = (active_source_id_ == source_ip);
+                sources_.erase(it);
+                if (was_active) {
+                    active_source_id_.clear();
+                    // Promote any other still-streaming source.
+                    for (auto& [id, s] : sources_) {
+                        if (s->mirror_sock != INVALID_SOCK) {
+                            active_source_id_ = id;
+                            break;
+                        }
+                    }
+                }
+                if (sources_.empty()) {
+                    next_source_number_ = 1;
+                    became_empty = true;
+                }
+                notify_sources_changed_locked();
+            }
+        }
+        if (became_empty && on_disconnect_) on_disconnect_();
         network::TcpServer::close_socket(client);
     });
 

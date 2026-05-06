@@ -9,9 +9,12 @@
 #include <openmirror/network/tcp_server.h>
 #include <atomic>
 #include <functional>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace openmirror::airplay {
 
@@ -54,6 +57,25 @@ public:
     void set_require_pin(bool require) { require_pin_ = require; }
     bool require_pin() const { return require_pin_; }
 
+    // ---- Multi-source support ----
+    // A connected mirror source (one per iOS device currently streaming).
+    struct SourceInfo {
+        std::string id;     // stable id (client IP)
+        std::string name;   // friendly display name (e.g. "Device 1")
+        bool active = false;
+        bool streaming = false; // mirror data socket currently open
+    };
+
+    using OnSourcesChanged = std::function<void(const std::vector<SourceInfo>&)>;
+    void set_sources_callback(OnSourcesChanged cb) { on_sources_changed_ = std::move(cb); }
+
+    std::vector<SourceInfo> list_sources();
+    std::string active_source_id();
+    void set_active_source(const std::string& id);
+    // Forcefully drop a source's mirror connection. The picker dot disappears
+    // and iOS may reconnect via a new SETUP if the user re-mirrors.
+    void disconnect_source(const std::string& id);
+
 private:
     // RTSP method handlers (the AirPlay control protocol)
     network::RtspResponse handle_info(const network::RtspRequest& req);
@@ -85,11 +107,35 @@ private:
 
     Pairing pairing_;
     FairPlay fairplay_;
-    MirrorBuffer mirror_buffer_;
     uint8_t hw_addr_[6] = {};
-    uint8_t aes_key_[16] = {};       // FairPlay-decrypted AES key
-    bool has_aes_key_ = false;
-    uint64_t stream_connection_id_ = 0;
+
+    // ---- Per-source state (registry keyed by client IP) ----
+    struct MirrorSource {
+        std::string id;       // client IP
+        std::string name;     // "Device N"
+        int number = 0;
+        uint8_t aes_key[16] = {};
+        bool has_aes_key = false;
+        uint64_t stream_connection_id = 0;
+        std::unique_ptr<MirrorBuffer> buffer;
+        socket_t mirror_sock = INVALID_SOCK;
+        // Per-source video decoder. Every connected source decodes
+        // continuously into its own decoder; the active source's frames are
+        // forwarded to the renderer. This makes switching instantaneous
+        // (no resync wait, no socket kick) at the cost of CPU.
+        std::unique_ptr<media::Decoder> video_decoder;
+    };
+
+    std::mutex sources_mutex_;
+    std::map<std::string, std::unique_ptr<MirrorSource>> sources_;
+    std::string active_source_id_;
+    int next_source_number_ = 1;
+    OnSourcesChanged on_sources_changed_;
+
+    static std::string ip_from_addr(const std::string& addr);
+    MirrorSource* get_or_create_source_locked(const std::string& ip);
+    std::vector<SourceInfo> snapshot_sources_locked() const;
+    void notify_sources_changed_locked();
 
     Config config_;
 

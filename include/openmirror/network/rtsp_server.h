@@ -3,7 +3,9 @@
 #include <openmirror/network/tcp_server.h>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <string>
+#include <vector>
 
 namespace openmirror::network {
 
@@ -17,6 +19,7 @@ struct RtspRequest {
     std::map<std::string, std::string> headers;
     std::vector<uint8_t> body;
     int cseq = 0;
+    std::string client_addr; // "ip:port" of the RTSP client
 };
 
 struct RtspResponse {
@@ -42,6 +45,9 @@ public:
     // Set a catch-all handler
     void set_default_handler(RtspHandler handler);
 
+    // Force-close all RTSP control sockets connected from `ip` (host part).
+    void disconnect_ip(const std::string& ip);
+
 private:
     void handle_client(socket_t client, const std::string& addr);
     RtspRequest parse_request(socket_t client);
@@ -50,6 +56,9 @@ private:
     TcpServer tcp_;
     std::map<std::string, RtspHandler> handlers_;
     RtspHandler default_handler_;
+
+    std::mutex clients_mutex_;
+    std::multimap<std::string, socket_t> clients_by_ip_; // ip -> active socket
 };
 
 } // namespace openmirror::network
