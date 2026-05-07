@@ -368,6 +368,13 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
     load_icon_texture();
     load_logo_texture();
 
+    // Load persisted user settings (bezel colour, screenshot toggles) BEFORE
+    // the first phone-frame generate so the initial texture uses the saved
+    // colour. Otherwise set_bezel_color() would invalidate the freshly-built
+    // frame texture and the waiting screen would never render.
+    settings_ = openmirror::Settings::load();
+    phone_frame_.set_bezel_color(settings_.bezel_r, settings_.bezel_g, settings_.bezel_b);
+
     phone_frame_.generate(sdl_renderer_, 390, 844);
 
     SDL_DisplayMode dm;
@@ -490,7 +497,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         info_lines_.push_back(make_info(L"AirPlay (iOS) \u00B7 scrcpy (Android)", 34, 160, 160, 160));
         info_lines_.push_back({nullptr, 0, 0}); // spacer
         info_lines_.push_back(make_info(L"(F) Fullscreen \u00B7 (M) Menu \u00B7 (L) Log \u00B7 (A) Add Android", 30, 130, 130, 130));
-        info_lines_.push_back(make_info(L"(I) Info \u00B7 (V) Version \u00B7 (Ctrl+S) Screenshot \u00B7 (Esc) Quit", 30, 130, 130, 130));
+        info_lines_.push_back(make_info(L"(I) Info \u00B7 (V) Version \u00B7 (S) Settings \u00B7 (Ctrl+S) Screenshot \u00B7 (Esc) Quit", 30, 130, 130, 130));
         info_lines_.push_back(make_info(L"In log: (Ctrl+C) Copy \u00B7 (Ctrl+X) Clear", 30, 130, 130, 130));
         info_lines_.push_back({nullptr, 0, 0}); // spacer
         info_lines_.push_back(make_info(L"Network requirements", 34, 160, 160, 160));
@@ -548,6 +555,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
 #else
     screenshot_dir_ = "screenshots";
 #endif
+
+    // (Settings already loaded earlier in init() before the first phone-frame
+    // generate so the initial waiting screen uses the saved bezel colour.)
 
     std::cout << "[Renderer] Window initialized\n";
     return true;
@@ -742,6 +752,11 @@ void Renderer::run() {
                         version_panel_animating_ = true;
                         version_panel_anim_start_ = std::chrono::steady_clock::now();
                     }
+                    if (info_panel_visible_ && settings_panel_visible_) {
+                        settings_panel_visible_ = false;
+                        settings_panel_animating_ = true;
+                        settings_panel_anim_start_ = std::chrono::steady_clock::now();
+                    }
                 }
                 if (event.key.keysym.sym == SDLK_v) {
                     version_panel_visible_ = !version_panel_visible_;
@@ -753,11 +768,34 @@ void Renderer::run() {
                         info_panel_animating_ = true;
                         info_panel_anim_start_ = std::chrono::steady_clock::now();
                     }
+                    if (version_panel_visible_ && settings_panel_visible_) {
+                        settings_panel_visible_ = false;
+                        settings_panel_animating_ = true;
+                        settings_panel_anim_start_ = std::chrono::steady_clock::now();
+                    }
                 }
                 if (event.key.keysym.sym == SDLK_s && (event.key.keysym.mod & KMOD_CTRL)) {
                     screenshot_requested_ = true;
                     btn_flash_ = true;
                     btn_flash_start_ = std::chrono::steady_clock::now();
+                }
+                // Plain (S) without Ctrl toggles the Settings panel.
+                if (event.key.keysym.sym == SDLK_s && !(event.key.keysym.mod & KMOD_CTRL)) {
+                    settings_panel_visible_ = !settings_panel_visible_;
+                    settings_panel_animating_ = true;
+                    settings_panel_anim_start_ = std::chrono::steady_clock::now();
+                    if (settings_panel_visible_) {
+                        if (info_panel_visible_) {
+                            info_panel_visible_ = false;
+                            info_panel_animating_ = true;
+                            info_panel_anim_start_ = std::chrono::steady_clock::now();
+                        }
+                        if (version_panel_visible_) {
+                            version_panel_visible_ = false;
+                            version_panel_animating_ = true;
+                            version_panel_anim_start_ = std::chrono::steady_clock::now();
+                        }
+                    }
                 }
                 // Log shortcuts: only when log panel is visible and no
                 // text input panel is open.
@@ -1004,6 +1042,11 @@ void Renderer::run() {
                             version_panel_animating_ = true;
                             version_panel_anim_start_ = std::chrono::steady_clock::now();
                         }
+                        if (info_panel_visible_ && settings_panel_visible_) {
+                            settings_panel_visible_ = false;
+                            settings_panel_animating_ = true;
+                            settings_panel_anim_start_ = std::chrono::steady_clock::now();
+                        }
                         break;
                     }
                     // Dismiss info panel on outside click
@@ -1039,6 +1082,11 @@ void Renderer::run() {
                                         info_panel_animating_ = true;
                                         info_panel_anim_start_ = std::chrono::steady_clock::now();
                                     }
+                                    if (version_panel_visible_ && settings_panel_visible_) {
+                                        settings_panel_visible_ = false;
+                                        settings_panel_animating_ = true;
+                                        settings_panel_anim_start_ = std::chrono::steady_clock::now();
+                                    }
                                     handled = true;
                                     break;
                                 }
@@ -1060,6 +1108,72 @@ void Renderer::run() {
                                 close_btn_.w, close_btn_.h)) {
                         running_.store(false);
                         return;
+                    }
+                    // Settings (gear) button — toggle settings panel
+                    if (settings_btn_.w > 0 &&
+                        in_rect(mx, my, settings_btn_.x, settings_btn_.y,
+                                settings_btn_.w, settings_btn_.h)) {
+                        settings_panel_visible_ = !settings_panel_visible_;
+                        settings_panel_animating_ = true;
+                        settings_panel_anim_start_ = std::chrono::steady_clock::now();
+                        // Close other panels for clarity
+                        if (settings_panel_visible_) {
+                            if (info_panel_visible_) {
+                                info_panel_visible_ = false;
+                                info_panel_animating_ = true;
+                                info_panel_anim_start_ = std::chrono::steady_clock::now();
+                            }
+                            if (version_panel_visible_) {
+                                version_panel_visible_ = false;
+                                version_panel_animating_ = true;
+                                version_panel_anim_start_ = std::chrono::steady_clock::now();
+                            }
+                        }
+                        break;
+                    }
+                    // Settings panel inner clicks (swatches + toggles).
+                    // Use a low threshold so clicks register as soon as the
+                    // panel is mostly open, rather than waiting for the full
+                    // 200ms slide-in animation to finish.
+                    if (settings_panel_visible_ && settings_panel_anim_ > 0.3f) {
+                        bool inside = in_rect(mx, my, settings_panel_rect_.x, settings_panel_rect_.y,
+                                              settings_panel_rect_.w, settings_panel_rect_.h);
+                        if (inside) {
+                            for (auto& sw : settings_swatch_btns_) {
+                                if (in_rect(mx, my, sw.second.x, sw.second.y, sw.second.w, sw.second.h)) {
+                                    static const uint8_t presets[][3] = {
+                                        { 28,  28,  30},  // Dark titanium (default)
+                                        { 90,  90,  95},  // Graphite
+                                        { 36,  46,  72},  // Midnight blue
+                                        { 36,  60,  44},  // Forest green
+                                        { 80,  34,  34},  // Deep red
+                                        {110,  84,  46},  // Bronze
+                                    };
+                                    int idx = sw.first;
+                                    if (idx >= 0 && idx < (int)(sizeof(presets) / sizeof(presets[0]))) {
+                                        apply_bezel_color(presets[idx][0], presets[idx][1], presets[idx][2]);
+                                    }
+                                    break;
+                                }
+                            }
+                            if (in_rect(mx, my, settings_toggle_save_btn_.x, settings_toggle_save_btn_.y,
+                                        settings_toggle_save_btn_.w, settings_toggle_save_btn_.h)) {
+                                settings_.screenshot_save_to_folder = !settings_.screenshot_save_to_folder;
+                                settings_.save();
+                            }
+                            if (in_rect(mx, my, settings_toggle_clip_btn_.x, settings_toggle_clip_btn_.y,
+                                        settings_toggle_clip_btn_.w, settings_toggle_clip_btn_.h)) {
+                                settings_.screenshot_copy_to_clipboard = !settings_.screenshot_copy_to_clipboard;
+                                settings_.save();
+                            }
+                            break;
+                        } else {
+                            // Click outside the open settings panel closes it.
+                            settings_panel_visible_ = false;
+                            settings_panel_animating_ = true;
+                            settings_panel_anim_start_ = std::chrono::steady_clock::now();
+                            break;
+                        }
                     }
                     // Screenshot button
                     if (in_rect(mx, my, screenshot_btn_.x, screenshot_btn_.y,
@@ -1382,6 +1496,7 @@ void Renderer::render_frame() {
     // Info/Version panels (furthest back — emerge from behind island)
     if (info_panel_visible_ || info_panel_animating_) draw_info_panel();
     if (version_panel_visible_ || version_panel_animating_) draw_version_panel();
+    if (settings_panel_visible_ || settings_panel_animating_) draw_settings_panel();
     if (android_panel_visible_ || android_panel_animating_) draw_android_panel();
 
     // Island bar (behind frame — slides behind bezel)
@@ -1645,7 +1760,11 @@ void Renderer::render_frame() {
             SDL_GetMouseState(&mmx, &mmy);
 
             // Rounded-rect background, same recipe as draw_info_panel.
+            // Switch off blending so the body rect + side strips + corner
+            // discs do not alpha-compound into visible darker arcs at their
+            // overlap.
             int pr = std::max(6, pad / 2);
+            SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_NONE);
             SDL_SetRenderDrawColor(sdl_renderer_, 30, 30, 34, alpha);
             SDL_Rect body{draw_x + pr, draw_y, panel_w - pr * 2, panel_h};
             SDL_RenderFillRect(sdl_renderer_, &body);
@@ -1657,6 +1776,7 @@ void Renderer::render_frame() {
             fill_circle(sdl_renderer_, draw_x + panel_w - pr, draw_y + pr, pr);
             fill_circle(sdl_renderer_, draw_x + pr, draw_y + panel_h - pr, pr);
             fill_circle(sdl_renderer_, draw_x + panel_w - pr, draw_y + panel_h - pr, pr);
+            SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
 
             bezel_menu_items_.clear();
             int row_y = draw_y + pad - line_gap;
@@ -1813,8 +1933,11 @@ void Renderer::draw_island() {
     int island_x = svx + (svw - island_w) / 2;
     int island_y = svy + pad;
 
-    // Pill background
+    // Pill background. We temporarily switch the renderer to BLENDMODE_NONE
+    // so the rounded end caps overwrite the body rect at their overlap
+    // instead of alpha-compounding into a visible darker semi-circle.
     int pill_r = row_h / 2;
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawColor(sdl_renderer_, 20, 20, 22, 200);
     SDL_Rect body = {island_x + pill_r, island_y, island_w - pill_r * 2, island_h};
     SDL_RenderFillRect(sdl_renderer_, &body);
@@ -1829,6 +1952,9 @@ void Renderer::draw_island() {
         SDL_Rect bb = {island_x + br, island_y + island_h - br, island_w - br * 2, br};
         SDL_RenderFillRect(sdl_renderer_, &bb);
     }
+    // Restore alpha blending for everything that follows (buttons, icons,
+    // text) so they composite correctly over the pill.
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
 
     int mx, my;
     SDL_GetMouseState(&mx, &my);
@@ -1843,6 +1969,68 @@ void Renderer::draw_island() {
     }
     icon_btn_ = {icon_x, icon_y, icon_sz, icon_sz};
     bool icon_hover = in_rect(mx, my, icon_x, icon_y, icon_sz, icon_sz);
+    bool gear_hover = false;
+
+    // Settings (gear) button — placed to the right of the icon, far away from
+    // the screenshot button on the right cluster so they cannot be confused.
+    // The gear is intentionally smaller and dimmer than the right-cluster
+    // buttons so it reads as a secondary, low-emphasis control.
+    int gear_sz = std::max(16, btn_sz * 4 / 5);
+    int by_left = island_y + (row_h - gear_sz) / 2;
+    int gear_x = icon_x + icon_sz + std::max(4, pad / 2);
+    settings_btn_ = {gear_x, by_left, gear_sz, gear_sz};
+    {
+        bool gh = in_rect(mx, my, gear_x, by_left, gear_sz, gear_sz);
+        // Background pill — slightly transparent so it recedes into the island.
+        SDL_SetRenderDrawColor(sdl_renderer_, gh ? 60 : 42, gh ? 60 : 42, gh ? 65 : 46, gh ? 160 : 110);
+        fill_circle(sdl_renderer_, gear_x + gear_sz / 2, by_left + gear_sz / 2, gear_sz / 2);
+        // Cleaner gear icon: 8 trapezoidal teeth + ring + center hole.
+        int gcx = gear_x + gear_sz / 2, gcy = by_left + gear_sz / 2;
+        int r_outer = gear_sz * 9 / 20;   // tip of teeth
+        int r_inner = gear_sz * 7 / 20;   // base of teeth (= ring outer edge)
+        int r_ring  = gear_sz * 4 / 20;   // ring inner edge
+        int r_hole  = gear_sz * 2 / 20;   // center hole
+        const uint8_t bg_r = gh ? 60 : 42, bg_g = gh ? 60 : 42, bg_b = gh ? 65 : 46;
+        // Filled body of the gear: outer disk minus radial wedges between teeth.
+        for (int dy = -r_outer; dy <= r_outer; dy++) {
+            for (int dx = -r_outer; dx <= r_outer; dx++) {
+                int d2 = dx * dx + dy * dy;
+                if (d2 > r_outer * r_outer) continue;
+                float dist = std::sqrt((float)d2);
+                bool in_body;
+                if (dist <= r_inner) {
+                    in_body = true;
+                } else {
+                    // Outside the ring → only render where a tooth lives.
+                    // 8 teeth, each spans ~22 of the 45 degrees per slot.
+                    float ang = std::atan2((float)dy, (float)dx); // -PI..PI
+                    float slot = 6.28318f / 8.0f;                  // 45deg
+                    float local = std::fmod(ang + 6.28318f, slot); // 0..slot
+                    float half_tooth = slot * 0.28f;               // ~12.6deg each side of slot center
+                    float center_off = std::fabs(local - slot * 0.5f);
+                    in_body = (center_off <= half_tooth);
+                }
+                if (in_body) {
+                    // Dimmer fill so the gear reads as a secondary control.
+                    SDL_SetRenderDrawColor(sdl_renderer_, 200, 200, 205, gh ? 220 : 150);
+                    SDL_RenderDrawPoint(sdl_renderer_, gcx + dx, gcy + dy);
+                }
+            }
+        }
+        // Punch out the ring interior (between r_ring and r_hole stays solid white,
+        // inside r_hole is hollow — but we want a HOLE in the middle: so erase
+        // the inner ring area back to background, then erase the hole.
+        for (int dy = -r_ring; dy <= r_ring; dy++) {
+            for (int dx = -r_ring; dx <= r_ring; dx++) {
+                int d2 = dx * dx + dy * dy;
+                if (d2 <= r_ring * r_ring) {
+                    SDL_SetRenderDrawColor(sdl_renderer_, bg_r, bg_g, bg_b, gh ? 200 : 160);
+                    SDL_RenderDrawPoint(sdl_renderer_, gcx + dx, gcy + dy);
+                }
+            }
+        }
+        gear_hover = gh;
+    }
 
     // Buttons (right-aligned): screenshot, folder, close
     int bx = island_x + island_w - pad - btn_sz;
@@ -1904,12 +2092,16 @@ void Renderer::draw_island() {
     int dot = std::max(1, cr / 3);
     fill_circle(sdl_renderer_, ccx, ccy, dot);
 
+    // Settings (gear) button is now drawn next to the icon on the LEFT side
+    // (see block above). The right-cluster ends here with the screenshot button.
+
     // Hover detection (0=close, 1=screenshot, 2=folder, 3=icon)
     int new_hover = -1;
     if (close_hover) new_hover = 0;
     else if (ss_hover) new_hover = 1;
     else if (folder_hover) new_hover = 2;
     else if (icon_hover) new_hover = 3;
+    else if (gear_hover) new_hover = 6;
 
     // Tooltip — use the same draw_bezel_tooltip() as the bezel dots so the
     // styling, font size, edge-clamping and 1 s hover delay are identical
@@ -1923,6 +2115,7 @@ void Renderer::draw_island() {
             case 1: tip = "Screenshot (Ctrl+S)";      break;
             case 2: tip = "Open Screenshots Folder";  break;
             case 3: tip = "About 1PhoneMirror (I)"; break;
+            case 6: tip = "Settings (S)"; break;
         }
         if (tip) {
             // Anchor at the cursor, force tooltip BELOW so it never
@@ -2118,8 +2311,10 @@ void Renderer::draw_info_panel() {
 
     info_panel_rect_ = {panel_x, panel_y, panel_w, total_h};
 
-    // Rounded rect background
+    // Rounded rect background. BLENDMODE_NONE so the body + strips +
+    // corner discs cannot alpha-compound at their overlap.
     int pr = std::max(6, pad / 2);
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawColor(sdl_renderer_, 30, 30, 34, alpha);
     SDL_Rect body = {panel_x + pr, panel_y, panel_w - pr * 2, total_h};
     SDL_RenderFillRect(sdl_renderer_, &body);
@@ -2131,6 +2326,7 @@ void Renderer::draw_info_panel() {
     fill_circle(sdl_renderer_, panel_x + panel_w - pr, panel_y + pr, pr);
     fill_circle(sdl_renderer_, panel_x + pr, panel_y + total_h - pr, pr);
     fill_circle(sdl_renderer_, panel_x + panel_w - pr, panel_y + total_h - pr, pr);
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
 
     // Draw text lines centered
     int cy = panel_y + pad;
@@ -2229,8 +2425,10 @@ void Renderer::draw_version_panel() {
 
     version_panel_rect_ = {panel_x, panel_y, panel_w, panel_h};
 
-    // Rounded rect background
+    // Rounded rect background. BLENDMODE_NONE so the body + strips +
+    // corner discs cannot alpha-compound at their overlap.
     int pr = std::max(6, pad / 2);
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawColor(sdl_renderer_, 30, 30, 34, alpha);
     SDL_Rect body = {panel_x + pr, panel_y, panel_w - pr * 2, panel_h};
     SDL_RenderFillRect(sdl_renderer_, &body);
@@ -2242,6 +2440,7 @@ void Renderer::draw_version_panel() {
     fill_circle(sdl_renderer_, panel_x + panel_w - pr, panel_y + pr, pr);
     fill_circle(sdl_renderer_, panel_x + pr, panel_y + panel_h - pr, pr);
     fill_circle(sdl_renderer_, panel_x + panel_w - pr, panel_y + panel_h - pr, pr);
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
 
     // Set clip rect for scrolling content
     SDL_Rect clip = {panel_x, panel_y, panel_w, panel_h};
@@ -2283,6 +2482,210 @@ void Renderer::draw_version_panel() {
     }
 }
 
+// ----------------------------------------------------------------------------
+// Settings panel — bezel colour swatches + screenshot toggles
+// ----------------------------------------------------------------------------
+
+void Renderer::drawer_color(uint8_t& r, uint8_t& g, uint8_t& b) const {
+    // Derive the drawer / sub-panel colour from the bezel: a darker shade
+    // of the same hue, clamped so log text remains legible.
+    int br = phone_frame_.bezel_r();
+    int bg = phone_frame_.bezel_g();
+    int bb = phone_frame_.bezel_b();
+    int dr = br - 8, dg = bg - 8, db = bb - 8;
+    if (dr < 18) dr = 18; if (dr > 40) dr = 40;
+    if (dg < 18) dg = 18; if (dg > 40) dg = 40;
+    if (db < 22) db = 22; if (db > 45) db = 45;
+    r = (uint8_t)dr; g = (uint8_t)dg; b = (uint8_t)db;
+}
+
+void Renderer::apply_bezel_color(uint8_t r, uint8_t g, uint8_t b) {
+    settings_.bezel_r = r;
+    settings_.bezel_g = g;
+    settings_.bezel_b = b;
+    settings_.save();
+    // PhoneFrame::set_bezel_color invalidates its own texture/pixel caches.
+    // We must immediately re-generate it for the current screen size, otherwise
+    // is_generated() stays false until the next video frame arrives — which
+    // would leave the waiting screen blank for a user who is not yet connected.
+    phone_frame_.set_bezel_color(r, g, b);
+    int gw = (tex_width_  > 0) ? tex_width_  : 390;
+    int gh = (tex_height_ > 0) ? tex_height_ : 844;
+    phone_frame_.generate(sdl_renderer_, gw, gh);
+}
+
+void Renderer::draw_settings_panel() {
+    if (frame_dst_w_ == 0) return;
+
+    // Update animation
+    const float anim_duration = 200.0f;
+    if (settings_panel_animating_) {
+        float elapsed = (float)std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - settings_panel_anim_start_).count();
+        float t = std::min(1.0f, elapsed / anim_duration);
+        float eased = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+        settings_panel_anim_ = settings_panel_visible_ ? eased : (1.0f - eased);
+        if (t >= 1.0f) settings_panel_animating_ = false;
+    } else {
+        settings_panel_anim_ = settings_panel_visible_ ? 1.0f : 0.0f;
+    }
+    if (settings_panel_anim_ <= 0.0f) return;
+
+    float scale = (float)frame_dst_w_ / phone_frame_.frame_width();
+    int svx = frame_dst_x_ + (int)(phone_frame_.screen_x() * scale);
+    int svy = frame_dst_y_ + (int)(phone_frame_.screen_y() * scale);
+    int svw = (int)(phone_frame_.screen_width() * scale);
+
+    int pad      = std::max(10, svw / 18);
+    int row_gap  = std::max(6,  pad / 2);
+    int title_h  = std::max(14, svw / 22);
+    int label_h  = std::max(11, svw / 30);
+    int swatch   = std::max(22, svw / 14);
+    int sw_gap   = std::max(6,  swatch / 4);
+
+    int panel_w = (int)(svw * 0.86f);
+    int panel_x = svx + (svw - panel_w) / 2;
+
+    // Bottom of island row
+    int btn_sz = std::max(20, svw / 14);
+    int ipad = btn_sz / 3;
+    int island_bottom = svy + ipad + btn_sz + ipad * 2;
+    int panel_y_target = island_bottom + pad / 2;
+
+    // Two rows of 3 swatches, then 2 toggle rows
+    const int N_PRESETS = 6;
+    static const uint8_t presets[N_PRESETS][3] = {
+        { 28,  28,  30},  // Dark titanium (default)
+        { 90,  90,  95},  // Graphite
+        { 36,  46,  72},  // Midnight blue
+        { 36,  60,  44},  // Forest green
+        { 80,  34,  34},  // Deep red
+        {110,  84,  46},  // Bronze
+    };
+
+    int swatches_per_row = 3;
+    int swatch_rows = (N_PRESETS + swatches_per_row - 1) / swatches_per_row;
+    int total_h = pad + title_h + row_gap
+                + swatch_rows * (swatch + row_gap)
+                + row_gap + label_h + row_gap            // toggle 1
+                + label_h + row_gap                       // toggle 2
+                + pad;
+
+    // Slide animation
+    int slide_offset = (int)((1.0f - settings_panel_anim_) * total_h * 0.3f);
+    int panel_y = panel_y_target - slide_offset;
+    uint8_t alpha      = (uint8_t)(240 * settings_panel_anim_);
+    uint8_t text_alpha = (uint8_t)(255 * settings_panel_anim_);
+
+    settings_panel_rect_ = {panel_x, panel_y, panel_w, total_h};
+
+    // Rounded rect background (same recipe as info panel). BLENDMODE_NONE
+    // so the body + strips + corner discs cannot alpha-compound at their
+    // overlap.
+    int pr = std::max(6, pad / 2);
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(sdl_renderer_, 30, 30, 34, alpha);
+    SDL_Rect body = {panel_x + pr, panel_y, panel_w - pr * 2, total_h};
+    SDL_RenderFillRect(sdl_renderer_, &body);
+    SDL_Rect ls = {panel_x, panel_y + pr, pr, total_h - pr * 2};
+    SDL_RenderFillRect(sdl_renderer_, &ls);
+    SDL_Rect rs = {panel_x + panel_w - pr, panel_y + pr, pr, total_h - pr * 2};
+    SDL_RenderFillRect(sdl_renderer_, &rs);
+    fill_circle(sdl_renderer_, panel_x + pr, panel_y + pr, pr);
+    fill_circle(sdl_renderer_, panel_x + panel_w - pr, panel_y + pr, pr);
+    fill_circle(sdl_renderer_, panel_x + pr, panel_y + total_h - pr, pr);
+    fill_circle(sdl_renderer_, panel_x + panel_w - pr, panel_y + total_h - pr, pr);
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
+
+    auto draw_label = [&](const std::string& s, int font_h, int cx, int cy_top,
+                          uint8_t cr, uint8_t cg, uint8_t cb, bool centered) {
+        int tw = 0, th = 0;
+        SDL_Texture* tex = make_text_texture(sdl_renderer_, s, font_h, cr, cg, cb, &tw, &th);
+        if (!tex) return;
+        int x = centered ? (cx - tw / 2) : cx;
+        SDL_Rect dst = {x, cy_top, tw, th};
+        SDL_SetTextureAlphaMod(tex, text_alpha);
+        SDL_RenderCopy(sdl_renderer_, tex, nullptr, &dst);
+        SDL_DestroyTexture(tex);
+    };
+
+    int cy = panel_y + pad;
+    draw_label("Settings", title_h, panel_x + panel_w / 2, cy, 230, 230, 235, true);
+    cy += title_h + row_gap;
+
+    // Swatches grid
+    settings_swatch_btns_.clear();
+    int grid_w = swatches_per_row * swatch + (swatches_per_row - 1) * sw_gap;
+    int grid_x = panel_x + (panel_w - grid_w) / 2;
+    for (int i = 0; i < N_PRESETS; i++) {
+        int row = i / swatches_per_row;
+        int col = i % swatches_per_row;
+        int sx = grid_x + col * (swatch + sw_gap);
+        int sy = cy + row * (swatch + row_gap);
+        // Filled swatch
+        SDL_SetRenderDrawColor(sdl_renderer_, presets[i][0], presets[i][1], presets[i][2], alpha);
+        SDL_Rect sr = {sx, sy, swatch, swatch};
+        SDL_RenderFillRect(sdl_renderer_, &sr);
+        // Selected ring if currently active
+        bool selected = (presets[i][0] == settings_.bezel_r &&
+                          presets[i][1] == settings_.bezel_g &&
+                          presets[i][2] == settings_.bezel_b);
+        if (selected) {
+            SDL_SetRenderDrawColor(sdl_renderer_, 255, 255, 255, text_alpha);
+            for (int t = 0; t < 2; t++) {
+                SDL_Rect r2 = {sx - 2 - t, sy - 2 - t, swatch + 4 + 2 * t, swatch + 4 + 2 * t};
+                SDL_RenderDrawRect(sdl_renderer_, &r2);
+            }
+        } else {
+            SDL_SetRenderDrawColor(sdl_renderer_, 90, 90, 95, text_alpha);
+            SDL_RenderDrawRect(sdl_renderer_, &sr);
+        }
+        settings_swatch_btns_.push_back({i, BtnRect{sx, sy, swatch, swatch}});
+    }
+    cy += swatch_rows * (swatch + row_gap) + row_gap;
+
+    // Toggle helper
+    auto draw_toggle = [&](const std::string& label, bool on, int row_y) -> BtnRect {
+        int box = std::max(12, label_h + 2);
+        int row_x = panel_x + pad;
+        // Checkbox box
+        SDL_SetRenderDrawColor(sdl_renderer_, 50, 50, 55, alpha);
+        SDL_Rect br = {row_x, row_y, box, box};
+        SDL_RenderFillRect(sdl_renderer_, &br);
+        SDL_SetRenderDrawColor(sdl_renderer_, 120, 120, 130, text_alpha);
+        SDL_RenderDrawRect(sdl_renderer_, &br);
+        if (on) {
+            // Check mark (two simple lines)
+            SDL_SetRenderDrawColor(sdl_renderer_, 90, 200, 130, text_alpha);
+            int cx0 = row_x + box / 5;
+            int cy0 = row_y + box / 2;
+            int cx1 = row_x + box * 2 / 5;
+            int cy1 = row_y + box * 4 / 5;
+            int cx2 = row_x + box * 4 / 5;
+            int cy2 = row_y + box / 5;
+            for (int t = -1; t <= 1; t++) {
+                SDL_RenderDrawLine(sdl_renderer_, cx0, cy0 + t, cx1, cy1 + t);
+                SDL_RenderDrawLine(sdl_renderer_, cx1, cy1 + t, cx2, cy2 + t);
+            }
+        }
+        // Label to the right of the box
+        int label_x = row_x + box + std::max(6, box / 3);
+        draw_label(label, label_h, label_x,
+                   row_y + (box - label_h) / 2 - 1,
+                   220, 220, 225, false);
+        // Hit rect spans the full row (box + label) for easier clicking.
+        return BtnRect{row_x, row_y, panel_w - pad * 2, box};
+    };
+
+    settings_toggle_save_btn_ = draw_toggle(
+        "Save screenshots to Pictures folder",
+        settings_.screenshot_save_to_folder, cy);
+    cy += label_h + row_gap;
+    settings_toggle_clip_btn_ = draw_toggle(
+        "Copy screenshots to clipboard",
+        settings_.screenshot_copy_to_clipboard, cy);
+}
+
 void Renderer::draw_log_panel() {
 #ifdef _WIN32
     if (frame_dst_w_ == 0 || log_panel_anim_ < 0.01f) return;
@@ -2299,16 +2702,83 @@ void Renderer::draw_log_panel() {
 
     // Background — flat left edge (flush with phone), rounded right edge (drawer)
     int pr = std::max(8, panel_w / 30);
-    SDL_SetRenderDrawColor(sdl_renderer_, 22, 22, 26, 240);
-    // Main body
-    SDL_Rect body = {panel_x, panel_y, panel_w - pr, panel_h};
-    SDL_RenderFillRect(sdl_renderer_, &body);
-    // Right strip
-    SDL_Rect rs = {panel_x + panel_w - pr, panel_y + pr, pr, panel_h - pr * 2};
-    SDL_RenderFillRect(sdl_renderer_, &rs);
-    // Right rounded corners only
-    fill_circle(sdl_renderer_, panel_x + panel_w - pr, panel_y + pr, pr);
-    fill_circle(sdl_renderer_, panel_x + panel_w - pr, panel_y + panel_h - pr, pr);
+    // Right corner centers — placed so that the arc tangent points sit
+    // EXACTLY on the panel edges (cx + pr = panel_x + panel_w - 1, etc.).
+    int cx_r  = panel_x + panel_w - 1 - pr;
+    int cy_t  = panel_y + pr;
+    int cy_b  = panel_y + panel_h - 1 - pr;
+
+    uint8_t dr, dg, db; drawer_color(dr, dg, db);
+    // Compute the bezel-edge ("highlight") colour up front so we can both
+    // stroke the border and use it as the disc fill OUTSIDE the body so
+    // there is no alpha-blend mismatch creating a visible circle ghost.
+    int bw = std::max(2, std::min(3, panel_h / 200 + 2));
+    auto lite = [](uint8_t c, int d) -> uint8_t {
+        int v = (int)c + d; if (v < 0) v = 0; if (v > 255) v = 255; return (uint8_t)v;
+    };
+    uint8_t br_ = phone_frame_.bezel_r();
+    uint8_t bg_ = phone_frame_.bezel_g();
+    uint8_t bb_ = phone_frame_.bezel_b();
+    uint8_t er = lite(br_, 30), eg = lite(bg_, 30), eb = lite(bb_, 32);
+
+    // ---- Drawer interior + corner border --------------------------------
+    // Disable alpha blending for the silhouette so overlapping fills do not
+    // alpha-compound into a visible darker arc.
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_NONE);
+
+    // 1. Paint the bulk of the body (everything left of the right-side
+    //    rounded corners) in DRAWER colour, then add the top/bottom/right
+    //    border strips on top.
+    SDL_SetRenderDrawColor(sdl_renderer_, dr, dg, db, 255);
+    SDL_Rect drawer_body = {panel_x, panel_y + bw,
+                            cx_r - panel_x, panel_h - bw * 2};
+    SDL_RenderFillRect(sdl_renderer_, &drawer_body);
+    // Right inner strip between the two corner centers.
+    SDL_Rect drawer_strip = {cx_r, cy_t,
+                             pr - bw, cy_b - cy_t + 1};
+    SDL_RenderFillRect(sdl_renderer_, &drawer_strip);
+
+    // 2. Border strips (top / bottom / right). Edges stop at the corner
+    //    center column so the corner rasterizer below owns those pixels
+    //    exclusively.
+    SDL_SetRenderDrawColor(sdl_renderer_, er, eg, eb, 255);
+    SDL_Rect e_top = {panel_x, panel_y, cx_r - panel_x, bw};
+    SDL_RenderFillRect(sdl_renderer_, &e_top);
+    SDL_Rect e_bot = {panel_x, panel_y + panel_h - bw, cx_r - panel_x, bw};
+    SDL_RenderFillRect(sdl_renderer_, &e_bot);
+    SDL_Rect e_rgt = {panel_x + panel_w - bw, cy_t, bw, cy_b - cy_t + 1};
+    SDL_RenderFillRect(sdl_renderer_, &e_rgt);
+
+    // 3. Two right-side corners drawn as a single per-pixel pass per corner.
+    //    For each pixel in the corner bounding box we test float distance
+    //    from the corner center and pick:
+    //       distance <  in_pr      -> drawer colour
+    //       in_pr <= d <= out_pr   -> border colour
+    //       distance >  out_pr     -> skip (transparent)
+    //    This guarantees the border band has uniform thickness `bw` along
+    //    the entire arc, with no integer-rounding stair-step ghosts.
+    auto paint_corner = [&](int cx, int cy, int quad) {
+        float r_out = (float)pr + 0.5f;
+        float r_in  = (float)(pr - bw) + 0.5f;
+        for (int dy = -pr; dy <= pr; dy++) {
+            for (int dx = -pr; dx <= pr; dx++) {
+                if (quad == 0 && !(dx >= 0 && dy <= 0)) continue;
+                if (quad == 1 && !(dx >= 0 && dy >= 0)) continue;
+                float d = std::sqrt((float)(dx * dx + dy * dy));
+                if (d > r_out) continue;
+                if (d >= r_in) {
+                    SDL_SetRenderDrawColor(sdl_renderer_, er, eg, eb, 255);
+                } else {
+                    SDL_SetRenderDrawColor(sdl_renderer_, dr, dg, db, 255);
+                }
+                SDL_RenderDrawPoint(sdl_renderer_, cx + dx, cy + dy);
+            }
+        }
+    };
+    paint_corner(cx_r, cy_t, 0);
+    paint_corner(cx_r, cy_b, 1);
+
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
 
     // Get log lines
     auto lines = openmirror::LogBuffer::instance().get_lines();
@@ -2771,7 +3241,17 @@ void Renderer::take_screenshot() {
         return;
     }
 
-    std::filesystem::create_directories(screenshot_dir_);
+    const bool save = settings_.screenshot_save_to_folder;
+    const bool clip = settings_.screenshot_copy_to_clipboard;
+    if (!save && !clip) {
+        std::cout << "[Screenshot] Both save-to-folder and clipboard are disabled in settings\n";
+        toast_text_ = "Screenshot disabled in Settings";
+        toast_active_ = true;
+        toast_start_ = std::chrono::steady_clock::now();
+        return;
+    }
+
+    if (save) std::filesystem::create_directories(screenshot_dir_);
 
     auto now = std::chrono::system_clock::now();
     auto tt = std::chrono::system_clock::to_time_t(now);
@@ -2793,24 +3273,36 @@ void Renderer::take_screenshot() {
             last_frame_data_.data(), last_frame_w_, last_frame_h_, last_frame_stride_,
             &out_w, &out_h);
         if (composite) {
-            if (stbi_write_png(filename.c_str(), out_w, out_h, 4, composite, out_w * 4)) {
+            bool wrote = true;
+            if (save) {
+                wrote = stbi_write_png(filename.c_str(), out_w, out_h, 4, composite, out_w * 4) != 0;
+            }
+            if (wrote) {
                 saved = true;
-                copy_to_clipboard(composite, out_w, out_h);
-                std::cout << "[Screenshot] Saved: " << filename << " (" << out_w << "x" << out_h << ")\n";
+                if (clip) copy_to_clipboard(composite, out_w, out_h);
+                if (save) std::cout << "[Screenshot] Saved: " << filename << " (" << out_w << "x" << out_h << ")\n";
+                else      std::cout << "[Screenshot] Copied to clipboard (" << out_w << "x" << out_h << ")\n";
             }
             delete[] composite;
         }
     } else {
-        if (stbi_write_png(filename.c_str(), last_frame_w_, last_frame_h_, 4,
-                           last_frame_data_.data(), last_frame_stride_)) {
+        bool wrote = true;
+        if (save) {
+            wrote = stbi_write_png(filename.c_str(), last_frame_w_, last_frame_h_, 4,
+                                   last_frame_data_.data(), last_frame_stride_) != 0;
+        }
+        if (wrote) {
             saved = true;
-            copy_to_clipboard(last_frame_data_.data(), last_frame_w_, last_frame_h_);
-            std::cout << "[Screenshot] Saved: " << filename << "\n";
+            if (clip) copy_to_clipboard(last_frame_data_.data(), last_frame_w_, last_frame_h_);
+            if (save) std::cout << "[Screenshot] Saved: " << filename << "\n";
+            else      std::cout << "[Screenshot] Copied to clipboard\n";
         }
     }
 
     if (saved) {
-        toast_text_ = "Saved to Pictures & copied to clipboard";
+        if      (save && clip) toast_text_ = "Saved to Pictures & copied to clipboard";
+        else if (save)         toast_text_ = "Saved to Pictures";
+        else                   toast_text_ = "Copied to clipboard";
         toast_active_ = true;
         toast_start_ = std::chrono::steady_clock::now();
     }

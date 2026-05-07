@@ -49,6 +49,7 @@ set(NETWORK_SOURCES
 set(CORE_SOURCES
     src/main.cpp
     src/app.cpp
+    src/settings.cpp
     ${MEDIA_SOURCES}
     ${NETWORK_SOURCES}
     lib/stb_image_write_impl.c

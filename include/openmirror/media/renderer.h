@@ -2,6 +2,7 @@
 
 #include <openmirror/media/decoder.h>
 #include <openmirror/media/phone_frame.h>
+#include <openmirror/settings.h>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -103,8 +104,8 @@ private:
 
     // Button hit rects
     struct BtnRect { int x = 0, y = 0, w = 0, h = 0; };
-    BtnRect close_btn_, screenshot_btn_, folder_btn_, icon_btn_, info_btn_, menu_btn_;
-    int hover_btn_ = -1; // -1=none, 0=close, 1=screenshot, 2=folder, 3=icon, 4=info, 5=menu
+    BtnRect close_btn_, screenshot_btn_, folder_btn_, icon_btn_, info_btn_, menu_btn_, settings_btn_;
+    int hover_btn_ = -1; // -1=none, 0=close, 1=screenshot, 2=folder, 3=icon, 4=info, 5=menu, 6=settings
 
     // Island visibility & animation
     bool island_visible_ = true;
@@ -222,6 +223,23 @@ private:
     std::vector<InfoLine> version_lines_;
     int version_scroll_offset_ = 0;
     void draw_version_panel();
+
+    // Settings panel (gear icon in island)
+    openmirror::Settings settings_;
+    bool settings_panel_visible_ = false;
+    bool settings_panel_animating_ = false;
+    float settings_panel_anim_ = 0.0f;
+    std::chrono::steady_clock::time_point settings_panel_anim_start_;
+    BtnRect settings_panel_rect_;
+    // Hit rects computed during draw, consumed on click.
+    std::vector<std::pair<int /*preset_index*/, BtnRect>> settings_swatch_btns_;
+    BtnRect settings_toggle_save_btn_;
+    BtnRect settings_toggle_clip_btn_;
+    void draw_settings_panel();
+    void apply_bezel_color(uint8_t r, uint8_t g, uint8_t b);
+    // Drawer / sub-panel base colour derived from the current bezel colour
+    // so the log panel always contrasts cleanly against the phone body.
+    void drawer_color(uint8_t& r, uint8_t& g, uint8_t& b) const;
 
     // Log panel (slides out to the right of phone frame)
     bool log_panel_visible_ = false;

@@ -41,6 +41,14 @@ public:
     int bezel_bottom_size() const { return bezel_bottom_; }
     int corner_radius() const { return corner_radius_; }
 
+    // User-configurable bezel colour. Button + edge colours are derived
+    // automatically. Calling this invalidates the cached texture so the
+    // next generate() call re-rasterises with the new palette.
+    void set_bezel_color(uint8_t r, uint8_t g, uint8_t b);
+    uint8_t bezel_r() const { return bezel_r_; }
+    uint8_t bezel_g() const { return bezel_g_; }
+    uint8_t bezel_b() const { return bezel_b_; }
+
     // True if last generate() detected a tablet aspect ratio (used by UI to
     // keep overlays from scaling up on iPad-shaped frames).
     bool is_tablet() const { return is_tablet_; }
@@ -67,6 +75,9 @@ private:
 
     SDL_Texture* texture_ = nullptr;
     uint32_t* frame_pixels_ = nullptr; // Kept for screenshot compositing
+
+    // User-configurable bezel colour (defaults to dark titanium).
+    uint8_t bezel_r_ = 28, bezel_g_ = 28, bezel_b_ = 30;
 
     int screen_w_ = 0;
     int screen_h_ = 0;

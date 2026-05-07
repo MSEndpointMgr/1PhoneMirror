@@ -17,11 +17,15 @@ static constexpr uint32_t rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
 }
 
 static constexpr uint32_t TRANSPARENT = rgba(0, 0, 0, 0);
-static constexpr uint32_t BEZEL_COLOR = rgba(28, 28, 30, 255);       // Dark titanium
-static constexpr uint32_t BEZEL_EDGE  = rgba(58, 58, 62, 255);       // Subtle lighter edge
 static constexpr uint32_t ISLAND_COLOR = rgba(0, 0, 0, 255);         // Dynamic Island black
-static constexpr uint32_t BUTTON_COLOR = rgba(44, 44, 48, 255);      // Side button color
-static constexpr uint32_t SCREEN_BORDER = rgba(20, 20, 22, 255);     // Thin border around screen
+
+// Derive a slightly lighter shade for highlight edges / side buttons.
+static inline uint8_t lighten(uint8_t c, int delta) {
+    int v = (int)c + delta;
+    if (v < 0)   v = 0;
+    if (v > 255) v = 255;
+    return (uint8_t)v;
+}
 
 PhoneFrame::PhoneFrame() = default;
 
@@ -30,10 +34,32 @@ PhoneFrame::~PhoneFrame() {
     delete[] frame_pixels_;
 }
 
+void PhoneFrame::set_bezel_color(uint8_t r, uint8_t g, uint8_t b) {
+    if (r == bezel_r_ && g == bezel_g_ && b == bezel_b_) return;
+    bezel_r_ = r; bezel_g_ = g; bezel_b_ = b;
+    // Invalidate cached texture so the next generate() rebuilds it.
+    if (texture_) { SDL_DestroyTexture(texture_); texture_ = nullptr; }
+    delete[] frame_pixels_; frame_pixels_ = nullptr;
+    // Force regeneration on next call by clearing the size cache.
+    screen_w_ = 0; screen_h_ = 0;
+}
+
 bool PhoneFrame::generate(SDL_Renderer* renderer, int screen_w, int screen_h) {
     if (texture_ && screen_w == screen_w_ && screen_h == screen_h_) {
         return true; // Already generated for this size
     }
+
+    // Derived palette (user-configurable bezel colour).
+    const uint32_t BEZEL_COLOR    = rgba(bezel_r_, bezel_g_, bezel_b_, 255);
+    const uint32_t BEZEL_EDGE     = rgba(lighten(bezel_r_, 30),
+                                          lighten(bezel_g_, 30),
+                                          lighten(bezel_b_, 32), 255);
+    const uint32_t BUTTON_COLOR   = rgba(lighten(bezel_r_, 16),
+                                          lighten(bezel_g_, 16),
+                                          lighten(bezel_b_, 18), 255);
+    const uint32_t SCREEN_BORDER  = rgba(lighten(bezel_r_, -8),
+                                          lighten(bezel_g_, -8),
+                                          lighten(bezel_b_, -8), 255);
 
     // Clean up previous
     if (texture_) { SDL_DestroyTexture(texture_); texture_ = nullptr; }

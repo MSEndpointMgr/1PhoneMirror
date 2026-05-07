@@ -104,8 +104,11 @@ the phone.
 | `A` | Open Android pair / connect dialog |
 | `I` | Toggle info panel |
 | `V` | Toggle version history |
+| `S` | Toggle settings panel (bezel colour, screenshot options) |
 | `P` | Toggle phone-frame overlay |
-| `Ctrl+S` | Screenshot to clipboard + Pictures folder |
+| `Ctrl+S` | Screenshot (saves to Pictures folder and/or clipboard per Settings) |
+| `Ctrl+C` | (Log viewer) Copy entire log to clipboard |
+| `Ctrl+X` | (Log viewer) Clear log |
 | `Esc` | Close panel / quit |
 
 ## Command-line options
