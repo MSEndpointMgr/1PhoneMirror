@@ -124,18 +124,42 @@ jobs:
           path: dist/1PhoneMirror-${{ steps.ver.outputs.version }}.msi
           retention-days: 5
 
-      - name: Create / update GitHub Release
+      - name: Publish Release to public repo (MSEndpointMgr/1PhoneMirror)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: 1PhoneMirror ${{ steps.ver.outputs.version }}
-          generate_release_notes: true
-          files: dist/1PhoneMirror-${{ steps.ver.outputs.version }}.msi
-          body: |
-            **SHA256:** `${{ steps.hash.outputs.sha256 }}`
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          SHA256: ${{ steps.hash.outputs.sha256 }}
+          TAG: ${{ github.ref_name }}
+        shell: pwsh
+        run: |
+          $msi = "dist\1PhoneMirror-$env:VERSION.msi"
+          $body = @"
+          **SHA256:** ``$env:SHA256``
 
-            Install via winget once the manifest PR is merged:
-            ```
-            winget install MSEndpointMgr.1PhoneMirror
-            ```
+          Install via winget once the manifest PR is merged:
+          ``````
+          winget install MSEndpointMgr.1PhoneMirror
+          ``````
+          "@
+          $bodyFile = Join-Path $env:RUNNER_TEMP "release-body.md"
+          Set-Content -Path $bodyFile -Value $body -Encoding UTF8
+
+          # Create the tag in the public repo if it doesn't exist (releases need a ref).
+          $existingTag = gh api "repos/MSEndpointMgr/1PhoneMirror/git/refs/tags/$env:TAG" 2>$null
+          if (-not $existingTag) {
+            # Point the public tag at the public repo's default branch HEAD.
+            $sha = gh api "repos/MSEndpointMgr/1PhoneMirror/git/refs/heads/main" --jq ".object.sha"
+            gh api -X POST "repos/MSEndpointMgr/1PhoneMirror/git/refs" `
+              -f "ref=refs/tags/$env:TAG" -f "sha=$sha" | Out-Null
+          }
+
+          # Create or replace the release.
+          $existingRelease = gh release view $env:TAG --repo MSEndpointMgr/1PhoneMirror 2>$null
+          if ($existingRelease) {
+            gh release delete $env:TAG --repo MSEndpointMgr/1PhoneMirror --yes
+          }
+          gh release create $env:TAG $msi `
+            --repo MSEndpointMgr/1PhoneMirror `
+            --title "1PhoneMirror $env:VERSION" `
+            --notes-file $bodyFile

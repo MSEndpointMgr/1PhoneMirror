@@ -33,11 +33,25 @@ jobs:
             $tag = 'v${{ github.event.inputs.version }}'
           }
           $version = $tag -replace '^v',''
-          $url = "https://github.com/${{ github.repository }}/releases/download/$tag/1PhoneMirror-$version.msi"
+          $url = "https://github.com/MSEndpointMgr/1PhoneMirror/releases/download/$tag/1PhoneMirror-$version.msi"
           echo "version=$version" >> $env:GITHUB_OUTPUT
           echo "url=$url"        >> $env:GITHUB_OUTPUT
           Write-Host "Version: $version"
           Write-Host "URL:     $url"
+
+          # Wait until the public release is reachable (cross-repo publish step
+          # in release.yml races this workflow). Up to 3 minutes.
+          $deadline = (Get-Date).AddMinutes(3)
+          while ((Get-Date) -lt $deadline) {
+            try {
+              Invoke-WebRequest -Uri $url -Method Head -MaximumRedirection 5 -ErrorAction Stop | Out-Null
+              Write-Host "Public asset is reachable."
+              break
+            } catch {
+              Write-Host "Waiting for public release asset..."
+              Start-Sleep -Seconds 10
+            }
+          }
 
       - name: Submit manifest via winget-releaser
         uses: vedantmgoyal9/winget-releaser@main
@@ -46,3 +60,5 @@ jobs:
           version: ${{ steps.ctx.outputs.version }}
           installers-regex: '1PhoneMirror-.*\.msi$'
           token: ${{ secrets.WINGET_TOKEN }}
+          release-repository: MSEndpointMgr/1PhoneMirror
+          release-tag: v${{ steps.ctx.outputs.version }}

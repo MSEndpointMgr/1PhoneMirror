@@ -1,50 +1,84 @@
 # Distribution Routine — 1PhoneMirror
 
-How to ship a new version to GitHub Releases and the public winget catalog.
+How to ship a new version. Source lives in the **private** repo
+`SimonSkotheimsvik/1PhoneMirror`; the MSI is published to the **public** repo
+`MSEndpointMgr/1PhoneMirror` (which is what winget points at).
 
 > **Package identifier:** `MSEndpointMgr.1PhoneMirror`
-> **Repo:** `SimonSkotheimsvik/1PhoneMirror`
+> **Source repo (private):** `SimonSkotheimsvik/1PhoneMirror`
+> **Release repo (public):** `MSEndpointMgr/1PhoneMirror`
 > **MSI naming:** `1PhoneMirror-<version>.msi`
+> **Installer URL:** `https://github.com/MSEndpointMgr/1PhoneMirror/releases/download/v<version>/1PhoneMirror-<version>.msi`
 
 ---
 
 ## One-time setup (do this once)
 
-### 1. Create a GitHub Personal Access Token for winget
+### 1. Create the public release repo
 
-GitHub → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)** → **Generate new token (classic)**:
+In the **MSEndpointMgr** GitHub org, create a new **public** repository named
+`1PhoneMirror` with a GPL-3.0 license and a minimal user-facing README
+(install via winget + a screenshot — no source code).
 
-- Scope: **`public_repo`** only
+The public repo's `main` branch must exist before the first release (the
+release workflow creates tags off `main`).
+
+### 2. Create a `PUBLIC_RELEASE_TOKEN` (cross-repo publish)
+
+A fine-grained PAT scoped to **only** `MSEndpointMgr/1PhoneMirror`:
+
+- GitHub → your profile → **Settings** → **Developer settings** →
+  **Personal access tokens** → **Fine-grained tokens** → **Generate new token**
+- Resource owner: `MSEndpointMgr`
+- Repository access: Only select repositories → `MSEndpointMgr/1PhoneMirror`
+- Permissions: **Contents: Read and write**
 - Expiration: 1 year (calendar reminder to rotate)
-- Copy the token
 
-Add it to the repo:
-- Repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
-- Name: `WINGET_TOKEN`
-- Value: the token
+> If MSEndpointMgr requires PAT approval, an org admin must approve the token
+> before it works. Falls back to a classic PAT with `repo` scope if needed.
 
-### 2. Make the FIRST winget submission manually
-
-The package identifier `MSEndpointMgr.1PhoneMirror` does not exist in the catalog yet, so the automated update path can't run.
-
-**Prerequisite:** the GitHub Release must already exist with the MSI attached, so the URL below is reachable. If it isn't yet, do this first:
+Store it in the **private** source repo:
 
 ```powershell
-# Tag & push to trigger .github/workflows/release.yml — this builds the MSI
-# and creates the GitHub Release that hosts it.
+gh secret set PUBLIC_RELEASE_TOKEN --repo SimonSkotheimsvik/1PhoneMirror
+# paste the PAT when prompted
+```
+
+### 3. Create a `WINGET_TOKEN` for winget-releaser
+
+A **classic** PAT on **your personal account** (winget-releaser forks
+`microsoft/winget-pkgs` under your user):
+
+- Scope: **`public_repo`** only
+- Expiration: 1 year
+
+```powershell
+gh secret set WINGET_TOKEN --repo SimonSkotheimsvik/1PhoneMirror
+```
+
+### 4. Make the FIRST winget submission manually
+
+The package identifier `MSEndpointMgr.1PhoneMirror` does not yet exist in the
+catalog, so the automated update path can't run.
+
+**Prerequisite:** the **public** release must already exist. Tag and push from
+the private repo first to trigger `.github/workflows/release.yml`, which builds
+the MSI and pushes it to `MSEndpointMgr/1PhoneMirror/releases/v0.2.0`:
+
+```powershell
 git tag v0.2.0
 git push origin v0.2.0
 # Wait for the "Build & Release MSI" workflow to finish (Actions tab).
-# Confirm the asset exists:
-#   https://github.com/SimonSkotheimsvik/1PhoneMirror/releases/tag/v0.2.0
+# Confirm the asset exists at:
+#   https://github.com/MSEndpointMgr/1PhoneMirror/releases/tag/v0.2.0
 ```
 
-Once the release is live:
+Once the public release is live:
 
 ```powershell
 winget install Microsoft.WingetCreate
 
-wingetcreate new https://github.com/SimonSkotheimsvik/1PhoneMirror/releases/download/v0.2.0/1PhoneMirror-0.2.0.msi
+wingetcreate new https://github.com/MSEndpointMgr/1PhoneMirror/releases/download/v0.2.0/1PhoneMirror-0.2.0.msi
 ```
 
 The wizard asks for:
@@ -108,19 +142,25 @@ This triggers `.github/workflows/release.yml`:
 2. Restores vcpkg cache (or builds FFmpeg/SDL2/OpenSSL on cache miss — slow first time)
 3. Runs `package.ps1 -Version 0.2.1`
 4. Computes SHA256
-5. Creates GitHub Release `v0.2.1` and attaches `1PhoneMirror-0.2.1.msi`
+5. **Publishes the MSI to `MSEndpointMgr/1PhoneMirror` Releases as `v0.2.1`** using `PUBLIC_RELEASE_TOKEN`
 
 Watch progress: **Actions** tab → "Build & Release MSI".
 
+> No release is created in the private source repo. Only the public repo
+> hosts release assets.
+
 ### Step 3 — winget PR opens automatically
 
-When the Release is published, `.github/workflows/winget.yml` fires `winget-releaser`, which:
+When the **private** repo's release workflow finishes (which also publishes
+the public release), `.github/workflows/winget.yml` fires `winget-releaser`,
+which:
 
-1. Downloads the new MSI from the release asset
-2. Computes its hash
-3. Forks `microsoft/winget-pkgs` (or reuses the existing fork)
-4. Generates updated manifests under `manifests/m/MSEndpointMgr/1PhoneMirror/0.2.1/`
-5. Opens a PR in `microsoft/winget-pkgs`
+1. Waits until the public asset is reachable
+2. Downloads the MSI from `MSEndpointMgr/1PhoneMirror/releases/v0.2.1`
+3. Computes its hash
+4. Forks `microsoft/winget-pkgs` (or reuses the existing fork)
+5. Generates updated manifests under `manifests/m/MSEndpointMgr/1PhoneMirror/0.2.1/`
+6. Opens a PR in `microsoft/winget-pkgs`
 
 Check **Actions** → "Submit to winget" for the PR URL.
 
@@ -144,17 +184,16 @@ If the automated workflow fails, rebuild and submit locally:
 # Build & package
 .\package.ps1                    # produces dist\1PhoneMirror-X.Y.Z.msi
 
-# Upload to a manually created GitHub Release matching the tag
-# (gh CLI or web UI)
-
+# Upload to a manually created GitHub Release in the PUBLIC repo
 gh release create v0.2.1 dist\1PhoneMirror-0.2.1.msi `
+    --repo MSEndpointMgr/1PhoneMirror `
     --title "1PhoneMirror 0.2.1" `
     --generate-notes
 
 # Submit winget update
 wingetcreate update MSEndpointMgr.1PhoneMirror `
     --version 0.2.1 `
-    --urls https://github.com/SimonSkotheimsvik/1PhoneMirror/releases/download/v0.2.1/1PhoneMirror-0.2.1.msi `
+    --urls https://github.com/MSEndpointMgr/1PhoneMirror/releases/download/v0.2.1/1PhoneMirror-0.2.1.msi `
     --submit `
     --token <PAT>
 ```
