@@ -54,11 +54,20 @@ Set-Location $root
 
 # ---------- 1. Determine version ----------
 if (-not $Version) {
-    $rendererCpp = Join-Path $root 'src\media\renderer.cpp'
-    if (Test-Path $rendererCpp) {
-        $m = Select-String -Path $rendererCpp -Pattern 'v(\d+\.\d+\.\d+)' |
+    $cmake = Join-Path $root 'CMakeLists.txt'
+    if (Test-Path $cmake) {
+        $m = Select-String -Path $cmake -Pattern 'project\s*\([^)]*VERSION\s+(\d+\.\d+\.\d+)' |
              Select-Object -First 1
         if ($m) { $Version = $m.Matches[0].Groups[1].Value }
+    }
+    if (-not $Version) {
+        $rendererCpp = Join-Path $root 'src\media\renderer.cpp'
+        if (Test-Path $rendererCpp) {
+            # Match the info-panel title line specifically, not stray v0.x.y in comments.
+            $m = Select-String -Path $rendererCpp -Pattern '1PhoneMirror v(\d+\.\d+\.\d+)' |
+                 Select-Object -First 1
+            if ($m) { $Version = $m.Matches[0].Groups[1].Value }
+        }
     }
     if (-not $Version) { $Version = '0.0.0' }
 }
@@ -93,8 +102,40 @@ Copy-Item -Path (Join-Path $releaseDir '*') -Destination $stage -Recurse -Force
 # Add the third-party licenses next to the EXE.
 Copy-Item (Join-Path $installerDir 'THIRD_PARTY_LICENSES.txt') $stage -Force
 
+# ---------- 3b. VC++ runtime DLLs (vcruntime140.dll / msvcp140.dll) ----------
+# These are not redistributed by vcpkg's applocal, so the EXE will fail on
+# machines that don't already have the VC redist installed. Pull them from
+# the MSVC Redist folder of the toolchain we built with.
+function Find-VCRedistDir {
+    $vsRoots = @(
+        "${env:ProgramFiles}\Microsoft Visual Studio",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio"
+    )
+    foreach ($root in $vsRoots) {
+        if (-not (Test-Path $root)) { continue }
+        $candidates = Get-ChildItem -Path $root -Directory -Recurse -ErrorAction SilentlyContinue `
+            -Filter 'Microsoft.VC*.CRT' |
+            Where-Object { $_.FullName -match '\\Redist\\MSVC\\[\d.]+\\x64\\' }
+        if ($candidates) {
+            return ($candidates | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+        }
+    }
+    return $null
+}
+
+$vcDir = Find-VCRedistDir
+if (-not $vcDir) {
+    Write-Warning "VC++ redist folder not found - vcruntime140.dll / msvcp140.dll will be MISSING from the MSI."
+} else {
+    Write-Host "    Bundling VC++ runtime from $vcDir" -ForegroundColor DarkGray
+    foreach ($dll in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll')) {
+        $src = Join-Path $vcDir $dll
+        if (Test-Path $src) { Copy-Item $src $stage -Force }
+    }
+}
+
 # Sanity check — required runtimes must be present.
-$required = @('1PhoneMirror.exe', 'SDL2.dll')
+$required = @('1PhoneMirror.exe', 'SDL2.dll', 'vcruntime140.dll', 'msvcp140.dll')
 foreach ($f in $required) {
     if (-not (Test-Path (Join-Path $stage $f))) {
         throw "Required file missing from stage: $f"
@@ -128,19 +169,60 @@ if ($SignCertThumbprint) {
 
 # ---------- 5. Locate / install WiX ----------
 Write-Host "==> Locating WiX 5 toolset" -ForegroundColor Cyan
+
+# Make sure the global dotnet-tools directory is on PATH for this session.
+$toolsDir = Join-Path $env:USERPROFILE '.dotnet\tools'
+if ($env:PATH -notlike "*$toolsDir*") { $env:PATH = "$toolsDir;$env:PATH" }
+
 $wix = Get-Command wix.exe -ErrorAction SilentlyContinue
 if (-not $wix) {
-    Write-Host "    wix.exe not found — installing as a global dotnet tool"
-    & dotnet tool install --global wix --version 5.* 2>&1 | Out-Null
-    # Refresh PATH for current session.
-    $env:PATH += ';' + (Join-Path $env:USERPROFILE '.dotnet\tools')
+    Write-Host "    wix.exe not found - installing as a global dotnet tool"
+
+    # Resolve dotnet.exe even when it is not on PATH (common with new SDK installs
+    # where the shell session was started before the installer ran).
+    $dotnet = Get-Command dotnet.exe -ErrorAction SilentlyContinue
+    if (-not $dotnet) {
+        $candidates = @(
+            "$env:ProgramFiles\dotnet\dotnet.exe",
+            "$env:ProgramW6432\dotnet\dotnet.exe",
+            "${env:ProgramFiles(x86)}\dotnet\dotnet.exe",
+            "$env:LOCALAPPDATA\Microsoft\dotnet\dotnet.exe"
+        ) | Where-Object { $_ -and (Test-Path $_) }
+        if ($candidates) {
+            $dotnetExe = $candidates[0]
+            $dotnetDir = Split-Path -Parent $dotnetExe
+            $env:PATH = "$dotnetDir;$env:PATH"
+            $dotnet = Get-Command dotnet.exe -ErrorAction SilentlyContinue
+        }
+    }
+    if (-not $dotnet) {
+        throw "dotnet.exe not found. Install the .NET SDK from https://dot.net or open a new shell after installing it, then rerun .\package.ps1."
+    }
+
+    & $dotnet.Source tool install --global wix --version 5.* 2>&1 | Out-Null
     $wix = Get-Command wix.exe -ErrorAction SilentlyContinue
-    if (-not $wix) { throw "Failed to install WiX 5 — install .NET SDK and rerun." }
+    if (-not $wix) {
+        # Most common cause: no nuget.org source configured for the user.
+        $sources = & $dotnet.Source nuget list source 2>&1
+        if ($sources -notmatch 'nuget\.org') {
+            Write-Host "    Adding nuget.org source and retrying..."
+            & $dotnet.Source nuget add source https://api.nuget.org/v3/index.json -n nuget.org 2>&1 | Out-Null
+            & $dotnet.Source tool install --global wix --version 5.* 2>&1 | Out-Null
+            $wix = Get-Command wix.exe -ErrorAction SilentlyContinue
+        }
+    }
+    if (-not $wix) { throw "Failed to install WiX 5. Run 'dotnet tool install --global wix --version 5.*' manually and rerun." }
 }
 
 # Ensure the firewall and UI extensions are installed (idempotent).
+# Pin to the same major version as the wix tool itself (v5) — otherwise
+# `wix extension add -g <name>` defaults to v7 and the build fails with
+# "Could not find expected package root folder wixext5".
+$wixVersion = (& $wix.Source --version) -replace '[^\d.].*$',''
+$wixMinor = ($wixVersion -split '\.')[0..1] -join '.'
+$extVersion = if ($wixMinor) { "$wixMinor.*" } else { '5.*' }
 foreach ($ext in @('WixToolset.Firewall.wixext', 'WixToolset.UI.wixext')) {
-    & $wix.Source extension add -g $ext 2>&1 | Out-Null
+    & $wix.Source extension add -g "$ext/$extVersion" 2>&1 | Out-Null
 }
 
 # ---------- 6. Build the MSI ----------
@@ -158,7 +240,7 @@ $wxs = Join-Path $installerDir '1PhoneMirror.wxs'
     -d "StagingDir=$stage" `
     -bindpath $stage `
     -o $msi
-if ($LASTEXITCODE -ne 0) { throw "wix build failed" }
+if ($LASTEXITCODE -ne 0) { throw "wix build failed (exit $LASTEXITCODE)" }
 
 # Sign the MSI itself.
 Invoke-Signtool $msi

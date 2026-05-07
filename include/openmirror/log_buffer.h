@@ -32,6 +32,12 @@ public:
         return lines_;
     }
 
+    void clear() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        lines_.clear();
+        ++version_;
+    }
+
     size_t size() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return lines_.size();

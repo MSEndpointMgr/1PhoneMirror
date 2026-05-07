@@ -161,7 +161,8 @@ private:
     bool tooltip_ready(const std::string& key);
     // Draw a small tooltip pill near (anchor_x, anchor_y). The tip is drawn
     // above the anchor unless it would clip the window top.
-    void draw_bezel_tooltip(const std::string& text, int anchor_x, int anchor_y);
+    void draw_bezel_tooltip(const std::string& text, int anchor_x, int anchor_y,
+                            bool prefer_below = false);
     SDL_Texture* bezel_tip_tex_ = nullptr;
     int bezel_tip_w_ = 0, bezel_tip_h_ = 0;
     std::string bezel_tip_str_;

@@ -157,6 +157,23 @@ in lockstep with `CMakeLists.txt`.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
-The bundled `scrcpy-server.jar` is licensed under Apache 2.0 (see the scrcpy
-project), and `adb.exe` ships under the Android Open Source Project licenses.
+1PhoneMirror is licensed under **GPL-3.0** — see [LICENSE](LICENSE).
+
+### Third-party components
+
+The Windows installer bundles the following components, each under its own
+license:
+
+| Component | Version | License | Role |
+|-----------|---------|---------|------|
+| [FFmpeg](https://ffmpeg.org/) | vcpkg LGPL build | LGPL-2.1+ | H.264 / AAC decoding (dynamic link) |
+| [SDL2](https://www.libsdl.org/) | vcpkg | zlib | Window, input, rendering |
+| [OpenSSL](https://www.openssl.org/) | 3.x | Apache-2.0 | TLS for AirPlay handshake |
+| [scrcpy-server.jar](https://github.com/Genymobile/scrcpy) | 3.0 | Apache-2.0 | Pushed to Android device, runs there |
+| [adb.exe](https://developer.android.com/tools/adb) | Android Platform Tools | Apache-2.0 + AOSP | Pair / connect to Android over Wi-Fi |
+| [stb_image](https://github.com/nothings/stb) | header-only | MIT / Public Domain | PNG / JPG decode for the app icon |
+| Microsoft VC++ Runtime | 14.x | Microsoft Redistributable License | C/C++ runtime DLLs |
+
+All components are GPL-3.0 compatible. FFmpeg is built without `--enable-gpl`
+or `--enable-nonfree` and linked dynamically, satisfying the LGPL.
+

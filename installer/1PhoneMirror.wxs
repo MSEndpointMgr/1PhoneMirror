@@ -1,9 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   WiX 5 source for 1PhoneMirror.
-  Build with the WiX .NET tool: `dotnet tool install --global wix`
-  Then: `wix build installer\1PhoneMirror.wxs -ext WixToolset.Firewall.wixext -ext WixToolset.UI.wixext -arch x64 -d Version=0.3.0 -d StagingDir=build\stage -o dist\1PhoneMirror-0.3.0.msi`
-  The package.ps1 in the repo root automates all of this.
+  Build via package.ps1 (which installs the WiX dotnet tool, stages files,
+  and invokes `wix build`). See package.ps1 for the exact command line.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:fire="http://wixtoolset.org/schemas/v4/wxs/firewall"
@@ -45,20 +44,24 @@
       <Component Id="cmpMainExe" Guid="*">
         <File Id="exe.OnePhoneMirror"
               Source="$(StagingDir)\1PhoneMirror.exe"
-              KeyPath="yes" />
+              KeyPath="yes">
 
-        <!-- Firewall: allow the EXE itself, both TCP and UDP, any profile.
-             SYSTEM-context install (Intune) registers these without prompts. -->
-        <fire:FirewallException Id="fwTcp"
-                                Name="1PhoneMirror (TCP)"
-                                Protocol="tcp"
-                                Scope="any"
-                                Profile="all" />
-        <fire:FirewallException Id="fwUdp"
-                                Name="1PhoneMirror (UDP)"
-                                Protocol="udp"
-                                Scope="any"
-                                Profile="all" />
+          <!-- Firewall: allow the EXE itself, both TCP and UDP, all profiles.
+               Nesting under <File> binds the rule to this program path so
+               Windows does not prompt the user on first listen. -->
+          <fire:FirewallException Id="fwTcp"
+                                  Name="1PhoneMirror (TCP)"
+                                  Protocol="tcp"
+                                  Scope="any"
+                                  Profile="all"
+                                  IgnoreFailure="yes" />
+          <fire:FirewallException Id="fwUdp"
+                                  Name="1PhoneMirror (UDP)"
+                                  Protocol="udp"
+                                  Scope="any"
+                                  Profile="all"
+                                  IgnoreFailure="yes" />
+        </File>
       </Component>
     </ComponentGroup>
 

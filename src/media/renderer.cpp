@@ -107,10 +107,12 @@ static SDL_Texture* make_text_texture(SDL_Renderer* renderer, const std::string&
     return tex;
 }
 
-// Wide/Unicode version (for ♫, ©, etc.)
+// Wide/Unicode version (for ♫, ©, etc.). Optional font_name lets
+// callers pick e.g. "Segoe UI Symbol" for glyphs missing from "Segoe UI".
 static SDL_Texture* make_text_texture_w(SDL_Renderer* renderer, const std::wstring& text,
                                           int font_height, uint8_t cr, uint8_t cg, uint8_t cb,
-                                          int* out_w, int* out_h) {
+                                          int* out_w, int* out_h,
+                                          const wchar_t* font_name = L"Segoe UI") {
     if (text.empty()) return nullptr;
     HDC hdc = CreateCompatibleDC(nullptr);
     if (!hdc) return nullptr;
@@ -118,7 +120,7 @@ static SDL_Texture* make_text_texture_w(SDL_Renderer* renderer, const std::wstri
     HFONT font = CreateFontW(
         -font_height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_NATURAL_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+        CLEARTYPE_NATURAL_QUALITY, DEFAULT_PITCH | FF_SWISS, font_name);
     HFONT old_font = (HFONT)SelectObject(hdc, font);
 
     SIZE sz;
@@ -408,26 +410,30 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
 #ifdef _WIN32
     {
         auto seg = [&](const std::wstring& text, uint8_t r, uint8_t g, uint8_t b,
-                        const std::string& url = "", const std::string& tip = "") -> FooterSeg {
+                        const std::string& url = "", const std::string& tip = "",
+                        const wchar_t* font = L"Segoe UI") -> FooterSeg {
             FooterSeg fs;
             fs.url = url;
             fs.tooltip = tip;
-            fs.tex = make_text_texture_w(sdl_renderer_, text, 40, r, g, b, &fs.w, &fs.h);
+            fs.tex = make_text_texture_w(sdl_renderer_, text, 40, r, g, b, &fs.w, &fs.h, font);
             return fs;
         };
         // Line 1: "1PhoneMirror by MSEndpointMgr"
         footer_line1_.push_back(seg(L"1PhoneMirror by ", 120, 120, 120));
         footer_line1_.push_back(seg(L"MSEndpointMgr", 120, 120, 120,
                                      "https://msendpointmgr.com/", "Open MSEndpointMgr"));
-        // Line 2: "© 2026 ♫ Simon Skotheimsvik, MVP · v0.1.0"
+        // Line 2: "(c) 2026 \u266B Simon Skotheimsvik, MVP \u00B7 v0.2.0"
         footer_line2_.push_back(seg(L"\u00A9 2026 ", 100, 100, 100));
+        // Beamed-eighth-notes glyph — render via Segoe UI Symbol so it works
+        // on Windows builds where the regular Segoe UI font lacks U+266B.
         footer_line2_.push_back(seg(L"\u266B", 100, 100, 100,
-                                     "", "Tuned carefully for the community"));
+                                     "", "Tuned carefully for the community",
+                                     L"Segoe UI Symbol"));
         footer_line2_.push_back(seg(L" ", 100, 100, 100));
         footer_line2_.push_back(seg(L"Simon Skotheimsvik, MVP", 100, 100, 100,
                                      "https://linktr.ee/simonskotheimsvik", "More info of Simon"));
-        footer_line2_.push_back(seg(L" \u00B7 v0.3.0", 100, 100, 100,
-                                     "", "Version history"));
+        footer_line2_.push_back(seg(L" \u00B7 v0.2.0", 100, 100, 100,
+                                     "", "Version history (V)"));
     }
 #endif
 
@@ -440,11 +446,18 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
             line.tex = make_text_texture_w(sdl_renderer_, text, font_sz, r, g, b, &line.w, &line.h);
             return line;
         };
-        info_lines_.push_back(make_info(L"1PhoneMirror v0.3.0", 44, 255, 255, 255));
-        info_lines_.push_back(make_info(L"AirPlay \u00B7 Miracast \u00B7 Google Cast", 34, 160, 160, 160));
+        info_lines_.push_back(make_info(L"1PhoneMirror v0.2.0", 44, 255, 255, 255));
+        info_lines_.push_back(make_info(L"AirPlay (iOS) \u00B7 scrcpy (Android)", 34, 160, 160, 160));
         info_lines_.push_back({nullptr, 0, 0}); // spacer
-        info_lines_.push_back(make_info(L"F Fullscreen \u00B7 M Menu \u00B7 L Log \u00B7 A Add Android", 30, 130, 130, 130));
-        info_lines_.push_back(make_info(L"I Info \u00B7 V Version \u00B7 Ctrl+S Screenshot \u00B7 Esc Quit", 30, 130, 130, 130));
+        info_lines_.push_back(make_info(L"(F) Fullscreen \u00B7 (M) Menu \u00B7 (L) Log \u00B7 (A) Add Android", 30, 130, 130, 130));
+        info_lines_.push_back(make_info(L"(I) Info \u00B7 (V) Version \u00B7 (Ctrl+S) Screenshot \u00B7 (Esc) Quit", 30, 130, 130, 130));
+        info_lines_.push_back(make_info(L"In log: (Ctrl+C) Copy \u00B7 (Ctrl+X) Clear", 30, 130, 130, 130));
+        info_lines_.push_back({nullptr, 0, 0}); // spacer
+        info_lines_.push_back(make_info(L"Network requirements", 34, 160, 160, 160));
+        info_lines_.push_back(make_info(L"Same Wi-Fi / VLAN as the phone, mDNS (UDP 5353) allowed", 26, 130, 130, 130));
+        info_lines_.push_back(make_info(L"AirPlay: TCP 7000/7001/7100, UDP 6000-6010", 26, 130, 130, 130));
+        info_lines_.push_back(make_info(L"Android: TCP 27183 (loopback) + ADB pair port from phone", 26, 130, 130, 130));
+        info_lines_.push_back(make_info(L"Installer adds Windows Firewall rules for the .exe", 26, 130, 130, 130));
     }
 #endif
 
@@ -459,13 +472,13 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
-        version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.3.0", 34, 200, 200, 255));
+        version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.2.0", 34, 200, 200, 255));
         version_lines_.push_back(make_ver(L"Android mirroring (Wireless debugging, press A)", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
-        version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.2.2", 34, 200, 200, 255));
+        version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.1.6", 34, 200, 200, 255));
         version_lines_.push_back(make_ver(L"Multiple iOS devices stay paired, switch from bezel dots", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
-        version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.2.1", 34, 200, 200, 255));
+        version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.1.5", 34, 200, 200, 255));
         version_lines_.push_back(make_ver(L"AirPlay PIN pairing for trusted-device security", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.1.4", 34, 200, 200, 255));
@@ -706,6 +719,23 @@ void Renderer::run() {
                     btn_flash_ = true;
                     btn_flash_start_ = std::chrono::steady_clock::now();
                 }
+                // Log shortcuts: only when log panel is visible and no
+                // text input panel is open.
+                if (log_panel_visible_ && !android_panel_visible_ &&
+                    (event.key.keysym.mod & KMOD_CTRL)) {
+                    if (event.key.keysym.sym == SDLK_c) {
+                        std::string all;
+                        for (auto& ln : openmirror::LogBuffer::instance().get_lines()) {
+                            all += ln; all += '\n';
+                        }
+                        SDL_SetClipboardText(all.c_str());
+                        std::cout << "[Renderer] Log copied to clipboard ("
+                                  << all.size() << " bytes)\n";
+                    } else if (event.key.keysym.sym == SDLK_x) {
+                        openmirror::LogBuffer::instance().clear();
+                        std::cout << "[Renderer] Log cleared\n";
+                    }
+                }
                 if (event.key.keysym.sym == SDLK_a && add_android_fn_) {
                     show_android_panel();
                 }
@@ -847,6 +877,9 @@ void Renderer::run() {
                                 SDL_SetClipboardText(all.c_str());
                                 std::cout << "[Renderer] Log copied to clipboard ("
                                           << all.size() << " bytes)\n";
+                            } else if (clicked_action == "clear") {
+                                openmirror::LogBuffer::instance().clear();
+                                std::cout << "[Renderer] Log cleared\n";
                             }
                             break;
                         }
@@ -956,7 +989,7 @@ void Renderer::run() {
                         bool handled = false;
                         for (auto& hit : footer_hits_) {
                             if (in_rect(mx, my, hit.x, hit.y, hit.w, hit.h)) {
-                                if (hit.tooltip == "Version history") {
+                                if (hit.tooltip.rfind("Version history", 0) == 0) {
                                     version_panel_visible_ = !version_panel_visible_;
                                     version_panel_animating_ = true;
                                     version_panel_anim_start_ = std::chrono::steady_clock::now();
@@ -1342,7 +1375,7 @@ void Renderer::render_frame() {
         fill_circle(sdl_renderer_, star_cx, star_cy, dot_r);
         if (star_hover) {
             bezel_hover_key = "menu";
-            bezel_hover_text = "Menu";
+            bezel_hover_text = "Menu (M)";
             bezel_hover_ax = star_cx;
             bezel_hover_ay = star_cy + dot_r + 4;
         }
@@ -1366,7 +1399,7 @@ void Renderer::render_frame() {
         fill_circle(sdl_renderer_, star_cx, star_cy, dot_r);
         if (log_hover) {
             bezel_hover_key = "log";
-            bezel_hover_text = "Show log";
+            bezel_hover_text = "Show log (L)";
             bezel_hover_ax = star_cx - dot_r * 6;
             bezel_hover_ay = star_cy;
         }
@@ -1473,9 +1506,10 @@ void Renderer::render_frame() {
         struct Item { std::string action, label; };
         std::vector<Item> items;
         if (bezel_menu_target_ == "menu") {
-            items.push_back({"exit", "Exit application"});
+            items.push_back({"exit", "Exit application (Esc)"});
         } else if (bezel_menu_target_ == "log") {
-            items.push_back({"copy", "Copy log to clipboard"});
+            items.push_back({"copy", "Copy log to clipboard (Ctrl+C)"});
+            items.push_back({"clear", "Clear log (Ctrl+X)"});
         } else if (bezel_menu_target_.rfind("src:", 0) == 0) {
             std::string src_id = bezel_menu_target_.substr(4);
             std::string name = "device";
@@ -1642,7 +1676,8 @@ bool Renderer::tooltip_ready(const std::string& key) {
     return elapsed >= 1000;
 }
 
-void Renderer::draw_bezel_tooltip(const std::string& text, int anchor_x, int anchor_y) {
+void Renderer::draw_bezel_tooltip(const std::string& text, int anchor_x, int anchor_y,
+                                  bool prefer_below) {
     if (text.empty()) return;
 
     // Cap font size in tablet mode so tooltip stays the same neat size.
@@ -1673,8 +1708,14 @@ void Renderer::draw_bezel_tooltip(const std::string& text, int anchor_x, int anc
     SDL_GetWindowSize(window_, &win_w, &win_h);
 
     int tx = anchor_x - tw / 2;
-    int ty = anchor_y - th - 6;
-    if (ty < 4) ty = anchor_y + 12;
+    int ty;
+    if (prefer_below) {
+        ty = anchor_y + 12;
+        if (ty + th > win_h - 4) ty = anchor_y - th - 6; // flip up if no room
+    } else {
+        ty = anchor_y - th - 6;
+        if (ty < 4) ty = anchor_y + 12;
+    }
     if (tx + tw > win_w - 4) tx = win_w - tw - 4;
     if (tx < 4) tx = 4;
 
@@ -1827,43 +1868,28 @@ void Renderer::draw_island() {
     else if (folder_hover) new_hover = 2;
     else if (icon_hover) new_hover = 3;
 
-    // Update tooltip texture on hover change
-    if (new_hover != last_tooltip_btn_) {
-        last_tooltip_btn_ = new_hover;
-        if (tooltip_tex_) { SDL_DestroyTexture(tooltip_tex_); tooltip_tex_ = nullptr; }
-#ifdef _WIN32
+    // Tooltip — use the same draw_bezel_tooltip() as the bezel dots so the
+    // styling, font size, edge-clamping and 1 s hover delay are identical
+    // everywhere. Anchor below the mouse cursor so it never covers the
+    // button being explained.
+    if (new_hover >= 0 &&
+        tooltip_ready("island:" + std::to_string(new_hover))) {
         const char* tip = nullptr;
-        if (new_hover == 0) tip = "Close (Esc)";
-        else if (new_hover == 1) tip = "Screenshot (Ctrl+S)";
-        else if (new_hover == 2) tip = "Open Screenshots Folder";
-        else if (new_hover == 3) tip = "About 1PhoneMirror";
-        if (tip) {
-            tooltip_tex_ = make_text_texture(sdl_renderer_, tip, 48,
-                                              255, 255, 255, &tooltip_tex_w_, &tooltip_tex_h_);
+        switch (new_hover) {
+            case 0: tip = "Close (Esc)";              break;
+            case 1: tip = "Screenshot (Ctrl+S)";      break;
+            case 2: tip = "Open Screenshots Folder";  break;
+            case 3: tip = "About 1PhoneMirror (I)"; break;
         }
-#endif
-    }
-
-    // Draw tooltip pill
-    if (tooltip_tex_ && new_hover >= 0 && tooltip_ready("island:" + std::to_string(new_hover))) {
-        // High-res 48px render scaled to ~btn_sz*0.6 visual height
-        float tip_scale = std::max(0.22f, (float)btn_sz * 0.6f / 48.0f);
-        int disp_tw = (int)(tooltip_tex_w_ * tip_scale);
-        int disp_th = (int)(tooltip_tex_h_ * tip_scale);
-        int tp = std::max(3, disp_th / 3);
-        int tw = disp_tw + tp * 2;
-        int th = disp_th + tp * 2;
-        int tx = island_x + (island_w - tw) / 2;
-        int ty = island_y + island_h + 4;
-        // Rounded pill background
-        int pr = th / 2;
-        SDL_SetRenderDrawColor(sdl_renderer_, 40, 40, 44, 235);
-        SDL_Rect bg_body = {tx + pr, ty, tw - pr * 2, th};
-        SDL_RenderFillRect(sdl_renderer_, &bg_body);
-        fill_circle(sdl_renderer_, tx + pr, ty + pr, pr);
-        fill_circle(sdl_renderer_, tx + tw - pr, ty + pr, pr);
-        SDL_Rect tdst = {tx + tp, ty + tp, disp_tw, disp_th};
-        SDL_RenderCopy(sdl_renderer_, tooltip_tex_, nullptr, &tdst);
+        if (tip) {
+            // Anchor at the cursor, force tooltip BELOW so it never
+            // covers the button being explained.
+            draw_bezel_tooltip(tip, mx, my, /*prefer_below=*/true);
+        }
+    } else if (new_hover < 0 &&
+               hover_key_.rfind("island:", 0) == 0) {
+        // Reset the 1 s timer when the cursor leaves all island buttons.
+        hover_key_.clear();
     }
 
     // Toast text (in island, below button row)
@@ -1909,19 +1935,33 @@ void Renderer::draw_footer(int svx, int svy, int svw, int svh) {
     float sf = std::max(0.3f, svw / 300.0f) * (13.0f / 40.0f);
     sf = std::min(sf, 0.6f);
 
-    auto line_w = [&](const std::vector<FooterSeg>& line) {
+    auto line_w = [&](const std::vector<FooterSeg>& line, float scale) {
         int total = 0;
-        for (auto& s : line) total += (int)(s.w * sf);
+        for (auto& s : line) total += (int)(s.w * scale);
         return total;
     };
 
-    int total_w1 = line_w(footer_line1_);
-    int total_w2 = line_w(footer_line2_);
-    int line_h = footer_line1_.empty() ? 0 : (int)(footer_line1_[0].h * sf);
+    // Line 2 (copyright) is rendered slightly smaller than line 1.
+    float sf2 = sf * 0.85f;
+
+    int total_w1 = line_w(footer_line1_, sf);
+    int total_w2 = line_w(footer_line2_, sf2);
+    int line_h  = footer_line1_.empty() ? 0 : (int)(footer_line1_[0].h * sf);
+    int line_h2 = footer_line2_.empty() ? 0 : (int)(footer_line2_[0].h * sf2);
     int gap = std::max(2, line_h / 4);
 
     // Position near bottom of screen area
-    int footer_y = svy + svh - line_h * 2 - gap - std::max(6, svh / 25);
+    int footer_y = svy + svh - line_h - line_h2 - gap - std::max(6, svh / 25);
+
+    // Footer background band — distinct from waiting screen.
+    {
+        int pad_top = std::max(4, line_h / 3);
+        int band_y = footer_y - pad_top;
+        int band_h = (svy + svh) - band_y;
+        SDL_SetRenderDrawColor(sdl_renderer_, 16, 18, 24, 255);
+        SDL_Rect band = {svx, band_y, svw, band_h};
+        SDL_RenderFillRect(sdl_renderer_, &band);
+    }
 
     // Line 1
     int x1 = svx + (svw - total_w1) / 2;
@@ -1938,7 +1978,7 @@ void Renderer::draw_footer(int svx, int svy, int svw, int svh) {
     int y2 = footer_y + line_h + gap;
     int x2 = svx + (svw - total_w2) / 2;
     for (auto& s : footer_line2_) {
-        int sw = (int)(s.w * sf), sh = (int)(s.h * sf);
+        int sw = (int)(s.w * sf2), sh = (int)(s.h * sf2);
         SDL_Rect dst = {x2, y2, sw, sh};
         if (s.tex) SDL_RenderCopy(sdl_renderer_, s.tex, nullptr, &dst);
         if (!s.url.empty() || !s.tooltip.empty())
@@ -1960,38 +2000,12 @@ void Renderer::draw_footer(int svx, int svy, int svw, int svh) {
     }
 
     if (!hovered.empty() && tooltip_ready("footer:" + hovered)) {
-        if (footer_tooltip_str_ != hovered) {
-            if (footer_tooltip_tex_) { SDL_DestroyTexture(footer_tooltip_tex_); footer_tooltip_tex_ = nullptr; }
-#ifdef _WIN32
-            footer_tooltip_tex_ = make_text_texture(sdl_renderer_, hovered, 32,
-                                                     255, 255, 255, &footer_tooltip_w_, &footer_tooltip_h_);
-#endif
-            footer_tooltip_str_ = hovered;
-        }
-        if (footer_tooltip_tex_) {
-            // Display at same visual size as footer text
-            float ft_scale = sf * (40.0f / 32.0f);
-            int disp_w = (int)(footer_tooltip_w_ * ft_scale);
-            int disp_h = (int)(footer_tooltip_h_ * ft_scale);
-            int tp = std::max(3, disp_h / 3);
-            int tw = disp_w + tp * 2;
-            int th = disp_h + tp * 2;
-            int tx = hx + hw / 2 - tw / 2;
-            int ty = hy - th - 4;
-            // Clamp to screen area
-            tx = std::max(svx, std::min(tx, svx + svw - tw));
-            // Rounded pill background
-            int pr = th / 2;
-            SDL_SetRenderDrawColor(sdl_renderer_, 40, 40, 44, 235);
-            SDL_Rect bg_body = {tx + pr, ty, tw - pr * 2, th};
-            SDL_RenderFillRect(sdl_renderer_, &bg_body);
-            fill_circle(sdl_renderer_, tx + pr, ty + pr, pr);
-            fill_circle(sdl_renderer_, tx + tw - pr, ty + pr, pr);
-            SDL_Rect tdst = {tx + tp, ty + tp, disp_w, disp_h};
-            SDL_RenderCopy(sdl_renderer_, footer_tooltip_tex_, nullptr, &tdst);
-        }
-    } else if (!footer_tooltip_str_.empty()) {
-        footer_tooltip_str_.clear();
+        // Use the unified bezel tooltip styling so footer hovers match
+        // the rest of the UI. Anchor at the segment's top-center.
+        draw_bezel_tooltip(hovered, hx + hw / 2, hy);
+    } else if (hovered.empty() &&
+               hover_key_.rfind("footer:", 0) == 0) {
+        hover_key_.clear();
     }
 }
 
