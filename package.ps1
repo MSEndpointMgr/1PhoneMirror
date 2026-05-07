@@ -82,7 +82,9 @@ $installerDir = Join-Path $root 'installer'
 # ---------- 2. Build (Release) ----------
 if (-not $SkipBuild) {
     Write-Host "==> Building Release configuration" -ForegroundColor Cyan
-    & (Join-Path $root 'scripts\build.ps1')
+    $buildArgs = @{}
+    if ($env:VCPKG_ROOT) { $buildArgs['VcpkgRoot'] = $env:VCPKG_ROOT }
+    & (Join-Path $root 'scripts\build.ps1') @buildArgs
     if ($LASTEXITCODE -ne 0) { throw "Build failed" }
 }
 

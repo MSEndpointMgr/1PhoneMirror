@@ -58,16 +58,23 @@ jobs:
       - name: Install vcpkg + dependencies
         shell: pwsh
         run: |
-          $vcpkgRoot = "$env:USERPROFILE\vcpkg"
-          if (-not (Test-Path "$vcpkgRoot\vcpkg.exe")) {
-            git clone --depth 1 https://github.com/microsoft/vcpkg.git $vcpkgRoot
-            & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
+          # Prefer the preinstalled vcpkg on the runner image.
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          if (-not $vcpkgRoot -or -not (Test-Path "$vcpkgRoot\vcpkg.exe")) {
+            $vcpkgRoot = "$env:USERPROFILE\vcpkg-1pm"
+            if (-not (Test-Path "$vcpkgRoot\vcpkg.exe")) {
+              if (Test-Path $vcpkgRoot) { Remove-Item -Recurse -Force $vcpkgRoot }
+              git clone --depth 1 https://github.com/microsoft/vcpkg.git $vcpkgRoot
+              & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
+            }
           }
+          Write-Host "Using vcpkg at $vcpkgRoot"
           & "$vcpkgRoot\vcpkg.exe" install `
             "ffmpeg[avcodec,avformat,swscale,swresample]:x64-windows" `
             "sdl2:x64-windows" `
             "openssl:x64-windows" `
             --recurse
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
           echo "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
 
       - name: Install WiX 5 toolset + extensions
