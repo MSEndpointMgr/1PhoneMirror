@@ -154,7 +154,18 @@ void* spawn_detached(const std::string&, const std::vector<std::string>&) { retu
 // AdbController
 // ----------------------------------------------------------------------------
 
-AdbController::AdbController() = default;
+AdbController::AdbController() {
+    // Force adb to use its built-in (openscreen) mDNS backend instead of
+    // Bonjour. The Bonjour backend frequently goes stale after sleep/wake
+    // or a network change and silently reports 0 entries even when the
+    // phone is perfectly reachable. Openscreen is more reliable on
+    // Windows. Set before the adb server is started so it inherits the
+    // env var; if a server is already running with the wrong backend, the
+    // pair workflow will kill_server() once to recycle it.
+#ifdef _WIN32
+    SetEnvironmentVariableA("ADB_MDNS_OPENSCREEN", "1");
+#endif
+}
 AdbController::~AdbController() = default;
 
 int AdbController::run_(const std::vector<std::string>& args,
@@ -185,6 +196,39 @@ bool AdbController::disconnect(const std::string& ip_port) {
     std::vector<std::string> args = {"disconnect"};
     if (!ip_port.empty()) args.push_back(ip_port);
     return run_(args, {}, nullptr) == 0;
+}
+
+std::vector<AdbController::MdnsService> AdbController::mdns_services() {
+    std::vector<MdnsService> result;
+    std::string out;
+    if (run_({"mdns", "services"}, {}, &out) != 0) return result;
+
+    // Output:
+    //   List of discovered mdns services
+    //   adb-XXXX-YYYY\t_adb-tls-connect._tcp.\t192.168.1.50:42745
+    // Some adb builds use spaces instead of tabs.
+    std::istringstream iss(out);
+    std::string line;
+    std::getline(iss, line); // header
+    while (std::getline(iss, line)) {
+        if (line.empty()) continue;
+        std::istringstream ls(line);
+        MdnsService s;
+        ls >> s.name >> s.type >> s.ip_port;
+        if (s.ip_port.empty() || s.ip_port.find(':') == std::string::npos) continue;
+        result.push_back(std::move(s));
+    }
+    return result;
+}
+
+std::string AdbController::mdns_check() {
+    std::string out;
+    run_({"mdns", "check"}, {}, &out);
+    return out;
+}
+
+bool AdbController::kill_server() {
+    return run_({"kill-server"}, {}, nullptr) == 0;
 }
 
 std::vector<DeviceInfo> AdbController::list_devices() {

@@ -64,6 +64,7 @@ public:
         std::string name;   // friendly display name (e.g. "Device 1")
         bool active = false;
         bool streaming = false; // mirror data socket currently open
+        bool paused = false;    // client signaled video stream pause
     };
 
     using OnSourcesChanged = std::function<void(const std::vector<SourceInfo>&)>;
@@ -119,6 +120,10 @@ private:
         uint64_t stream_connection_id = 0;
         std::unique_ptr<MirrorBuffer> buffer;
         socket_t mirror_sock = INVALID_SOCK;
+        // Set true when the iOS client signals video stream pause via the
+        // SPS/PPS packet flag (0x56 / 0x5e). Cleared as soon as fresh video
+        // data resumes. Surfaced to the UI via SourceInfo::paused.
+        bool paused = false;
         // Per-source video decoder. Every connected source decodes
         // continuously into its own decoder; the active source's frames are
         // forwarded to the renderer. This makes switching instantaneous

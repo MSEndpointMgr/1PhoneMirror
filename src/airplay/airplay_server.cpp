@@ -74,6 +74,7 @@ AirPlayServer::snapshot_sources_locked() const {
         si.name = s->name;
         si.active = (s->id == active_source_id_);
         si.streaming = (s->mirror_sock != INVALID_SOCK);
+        si.paused = s->paused;
         out.push_back(std::move(si));
     }
     return out;
@@ -1162,6 +1163,16 @@ void AirPlayServer::mirror_receive_loop() {
                 // Encrypted video data (VCL NAL: non-IDR or IDR)
                 if (payload.empty()) break;
 
+                // Fresh video frames mean the stream resumed — clear pause.
+                {
+                    std::lock_guard lock(sources_mutex_);
+                    auto it = sources_.find(source_ip);
+                    if (it != sources_.end() && it->second->paused) {
+                        it->second->paused = false;
+                        notify_sources_changed_locked();
+                    }
+                }
+
                 std::vector<uint8_t> decrypted;
                 std::vector<uint8_t> output_buf;
 
@@ -1293,6 +1304,16 @@ void AirPlayServer::mirror_receive_loop() {
                 // Check if video stream is being suspended
                 if (flag0 == 0x56 || flag0 == 0x5e) {
                     std::cout << "[AirPlay] Mirror: client signaled video stream pause\n";
+                    bool changed = false;
+                    {
+                        std::lock_guard lock(sources_mutex_);
+                        auto it = sources_.find(source_ip);
+                        if (it != sources_.end() && !it->second->paused) {
+                            it->second->paused = true;
+                            changed = true;
+                        }
+                        if (changed) notify_sources_changed_locked();
+                    }
                 }
 
                 std::cout << "[AirPlay] Mirror: SPS(" << sps_size << ")+PPS("

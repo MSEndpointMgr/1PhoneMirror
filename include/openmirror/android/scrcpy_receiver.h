@@ -63,6 +63,24 @@ public:
     // `adb devices -l`, parsed.
     std::vector<DeviceInfo> list_devices();
 
+    // `adb mdns services` — returns one entry per discovered service.
+    // adb ships its own mDNS implementation that often works even when
+    // the system Bonjour stack does not (e.g. on AP-isolated Wi-Fi).
+    struct MdnsService {
+        std::string name;     // e.g. "adb-XXX-YYY._adb-tls-connect._tcp."
+        std::string type;     // "_adb-tls-connect._tcp." or "_adb-tls-pairing._tcp."
+        std::string ip_port;  // "192.168.1.50:42745"
+    };
+    std::vector<MdnsService> mdns_services();
+
+    // `adb mdns check` — returns the daemon's self-report.
+    std::string mdns_check();
+
+    // Forcefully terminate the adb server. The next command spawns a fresh
+    // one, which re-runs mDNS browse — useful when the Bonjour browse has
+    // gone stale after a network change or system sleep/wake.
+    bool kill_server();
+
     // `adb -s <serial> shell <cmd>` — captures stdout/stderr.
     int run_shell(const std::string& serial, const std::string& cmd,
                   std::string* out_stdout = nullptr);

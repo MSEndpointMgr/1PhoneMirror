@@ -40,6 +40,7 @@ public:
         std::string name;
         bool active = false;
         bool streaming = false;
+        bool paused = false;
     };
     using GetSourcesFn = std::function<std::vector<SourceEntry>()>;
     using SetActiveFn = std::function<void(const std::string& id)>;
@@ -60,8 +61,16 @@ public:
     // Returns success status string when the worker finishes; the renderer
     // only calls this on the main thread, so the App's implementation must
     // either return quickly or hand off to a worker (current impl does).
+    // Connect dialog driven by the renderer (so the styling matches the app).
+    // Returns success status string when the worker finishes; the renderer
+    // only calls this on the main thread, so the App's implementation must
+    // either return quickly or hand off to a worker (current impl does).
+    // `connect_port` is optional — when non-empty it bypasses adb's mDNS
+    // discovery (which is unreliable on networks that block multicast)
+    // and connects directly to <ip>:<connect_port>.
     using AndroidConnectFn = std::function<std::string(
-        const std::string& ip, const std::string& port, const std::string& pin)>;
+        const std::string& ip, const std::string& pair_port,
+        const std::string& pin, const std::string& connect_port)>;
     using AndroidDisconnectFn = std::function<void()>;
     void set_android_handlers(AndroidConnectFn connect, AndroidDisconnectFn disc) {
         android_connect_fn_ = std::move(connect);
@@ -100,11 +109,21 @@ private:
     bool phone_frame_enabled_ = true;
     bool screenshot_requested_ = false;
     bool window_shape_set_ = false;
+    int  window_shape_last_lp_w_ = -1; // pixel width of drawer region when last applied
+    int  window_shape_last_frame_w_ = -1;
+    int  window_shape_last_frame_x_ = -1;
+    int  window_shape_last_frame_y_ = -1;
     bool first_render_ = true;
 
     // Button hit rects
     struct BtnRect { int x = 0, y = 0, w = 0, h = 0; };
     BtnRect close_btn_, screenshot_btn_, folder_btn_, icon_btn_, info_btn_, menu_btn_, settings_btn_;
+    // Mini screenshot button drawn in the top bezel when the island menu
+    // is hidden, so users still have a visible affordance for Ctrl+S.
+    BtnRect bezel_screenshot_btn_;
+    // Mini close (X) button drawn in the top bezel when the island menu is
+    // hidden — same stroke aesthetic as the menu/log chevrons.
+    BtnRect bezel_close_btn_;
     int hover_btn_ = -1; // -1=none, 0=close, 1=screenshot, 2=folder, 3=icon, 4=info, 5=menu, 6=settings
 
     // Island visibility & animation
@@ -168,6 +187,10 @@ private:
     int bezel_tip_w_ = 0, bezel_tip_h_ = 0;
     std::string bezel_tip_str_;
     int bezel_tip_font_h_ = 0;
+    // Optional second line, rendered smaller and dimmer below the main
+    // text. The full string passed in may contain a single '\n' to split.
+    SDL_Texture* bezel_tip_tex2_ = nullptr;
+    int bezel_tip_w2_ = 0, bezel_tip_h2_ = 0;
 
     // Logo texture (loaded from PNG)
     SDL_Texture* logo_texture_ = nullptr;
@@ -235,6 +258,7 @@ private:
     std::vector<std::pair<int /*preset_index*/, BtnRect>> settings_swatch_btns_;
     BtnRect settings_toggle_save_btn_;
     BtnRect settings_toggle_clip_btn_;
+    BtnRect settings_toggle_compname_btn_;
     void draw_settings_panel();
     void apply_bezel_color(uint8_t r, uint8_t g, uint8_t b);
     // Drawer / sub-panel base colour derived from the current bezel colour
@@ -249,6 +273,22 @@ private:
     int log_scroll_offset_ = 0;
     int log_panel_full_w_ = 0; // dynamic full-open width (px), recomputed each frame
     uint64_t log_last_version_ = 0;
+    // Cached wrapped+rasterized log rows. Rebuilt only when the log version,
+    // font size, or full-open panel width changes — so during the slide
+    // animation we just re-clip to the visible drawer width instead of
+    // re-wrapping and re-rasterizing every frame.
+    struct LogRowCache {
+        std::string text;
+        SDL_Texture* tex = nullptr;
+        int w = 0, h = 0;
+        uint8_t r = 200, g = 200, b = 200;
+    };
+    std::vector<LogRowCache> log_row_cache_;
+    uint64_t log_cache_version_ = 0;
+    int log_cache_font_sz_ = 0;
+    int log_cache_full_w_ = 0;
+    int log_cache_total_h_ = 0;
+    void clear_log_row_cache();
     BtnRect log_btn_; // right bezel star button
     bool log_scrollbar_dragging_ = false;
     int log_sb_track_y_ = 0, log_sb_track_h_ = 0;
@@ -281,22 +321,28 @@ private:
     bool android_panel_animating_ = false;
     float android_panel_anim_ = 0.0f;
     std::chrono::steady_clock::time_point android_panel_anim_start_;
-    int android_focus_ = 0;            // 0=ip, 1=port, 2=pin
+    int android_focus_ = 0;            // 0=ip, 1=port, 2=pin, 3=connect_port
     std::string android_ip_;
     std::string android_port_;
     std::string android_pin_;
+    std::string android_connect_port_;
     std::string android_status_;
     bool android_status_is_error_ = false;
     bool android_busy_ = false;
     std::mutex android_status_mutex_;
     BtnRect android_panel_rect_;
-    BtnRect android_field_rects_[3]{};
+    BtnRect android_field_rects_[4]{};
     BtnRect android_connect_btn_;
     BtnRect android_disconnect_btn_;
     BtnRect android_close_btn_;
+    BtnRect android_help_btn_;
+    BtnRect android_help_close_btn_;
+    BtnRect android_help_panel_rect_;
+    bool android_help_visible_ = false;
     AndroidConnectFn android_connect_fn_;
     AndroidDisconnectFn android_disconnect_fn_;
     void draw_android_panel();
+    void draw_android_help();
     void android_submit();
 };
 

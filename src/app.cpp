@@ -95,7 +95,7 @@ bool App::init(const Config& config) {
             [this]() {
                 std::vector<media::Renderer::SourceEntry> out;
                 for (auto& s : airplay_.list_sources())
-                    out.push_back({s.id, s.name, s.active, s.streaming});
+                    out.push_back({s.id, s.name, s.active, s.streaming, s.paused});
 #ifdef ENABLE_ANDROID
                 if (scrcpy_.is_running()) {
                     media::Renderer::SourceEntry e;
@@ -252,8 +252,9 @@ bool App::init(const Config& config) {
             renderer_.show_android_panel();
         });
         renderer_.set_android_handlers(
-            [this](const std::string& ip, const std::string& port, const std::string& pin) {
-                return android_pair_and_connect(ip, port, pin);
+            [this](const std::string& ip, const std::string& port,
+                   const std::string& pin, const std::string& cport) {
+                return android_pair_and_connect(ip, port, pin, cport);
             },
             [this]() { android_disconnect(); });
 
@@ -264,7 +265,7 @@ bool App::init(const Config& config) {
                 std::vector<media::Renderer::SourceEntry> out;
 #ifdef ENABLE_AIRPLAY
                 for (auto& s : airplay_.list_sources())
-                    out.push_back({s.id, s.name, s.active, s.streaming});
+                    out.push_back({s.id, s.name, s.active, s.streaming, s.paused});
 #endif
                 if (scrcpy_.is_running()) {
                     media::Renderer::SourceEntry e;

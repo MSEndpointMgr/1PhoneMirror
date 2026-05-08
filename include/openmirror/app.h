@@ -54,10 +54,14 @@ public:
 
 #ifdef ENABLE_ANDROID
     // Pair via (ip, pair_port, pin) and start mirroring once the device
-    // appears via mDNS auto-discovery. Returns a human-readable status.
+    // appears via mDNS auto-discovery. If `connect_port` is non-empty,
+    // skips mDNS and connects directly to <ip>:<connect_port> (the value
+    // shown on the phone's main Wireless debugging screen).
+    // Returns a human-readable status.
     std::string android_pair_and_connect(const std::string& ip,
                                          const std::string& pair_port,
-                                         const std::string& pin);
+                                         const std::string& pin,
+                                         const std::string& connect_port = "");
     void android_disconnect();
 #endif
 

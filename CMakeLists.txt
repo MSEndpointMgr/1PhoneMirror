@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(1PhoneMirror VERSION 0.2.1 LANGUAGES C CXX)
+project(1PhoneMirror VERSION 0.2.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -99,6 +99,14 @@ target_include_directories(1PhoneMirror PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/lib
     ${AVCODEC_INCLUDE_DIR}
+)
+
+# Derive C++ version macros from the single source of truth (project()).
+# Keeps OPENMIRROR_VERSION_* in sync with package version automatically.
+target_compile_definitions(1PhoneMirror PRIVATE
+    OPENMIRROR_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    OPENMIRROR_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    OPENMIRROR_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
 
 target_link_libraries(1PhoneMirror PRIVATE

@@ -17,6 +17,12 @@ struct Settings {
     bool screenshot_save_to_folder = true;
     bool screenshot_copy_to_clipboard = true;
 
+    // When true, the AirPlay/Cast/Miracast service name advertises as
+    // "1PhoneMirror by <COMPUTERNAME>" instead of
+    // "1PhoneMirror by MSEndpointMgr". Useful when multiple instances run
+    // on the same network. Applied at next launch.
+    bool use_computer_name = false;
+
     // Returns the path to the settings file (creates the directory if needed).
     static std::string file_path();
 

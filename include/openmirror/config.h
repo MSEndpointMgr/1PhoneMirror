@@ -1,9 +1,17 @@
 #pragma once
 
 // Build configuration
+// Version macros are injected by CMake from project(... VERSION X.Y.Z) so
+// CMakeLists.txt is the single source of truth for the app version.
+#ifndef OPENMIRROR_VERSION_MAJOR
 #define OPENMIRROR_VERSION_MAJOR 0
-#define OPENMIRROR_VERSION_MINOR 2
+#endif
+#ifndef OPENMIRROR_VERSION_MINOR
+#define OPENMIRROR_VERSION_MINOR 0
+#endif
+#ifndef OPENMIRROR_VERSION_PATCH
 #define OPENMIRROR_VERSION_PATCH 0
+#endif
 #define OPENMIRROR_APP_NAME "1PhoneMirror by MSEndpointMgr"
 
 // Default network settings

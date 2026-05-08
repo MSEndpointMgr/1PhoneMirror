@@ -3,6 +3,7 @@
 #include <openmirror/log_buffer.h>
 #include <openmirror/network/tcp_server.h>
 #include <openmirror/airplay/srp_pin.h>
+#include <openmirror/settings.h>
 #ifdef ENABLE_ANDROID
 #include <openmirror/android/scrcpy_receiver.h>
 #endif
@@ -183,6 +184,7 @@ int main(int argc, char* argv[]) {
     openmirror::App::Config config;
 
     // Parse command line arguments
+    bool name_overridden = false;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
 
@@ -191,6 +193,7 @@ int main(int argc, char* argv[]) {
             return 0;
         } else if (arg == "--name" && i + 1 < argc) {
             config.name = argv[++i];
+            name_overridden = true;
         } else if (arg == "--width" && i + 1 < argc) {
             config.window_width = std::stoi(argv[++i]);
         } else if (arg == "--height" && i + 1 < argc) {
@@ -239,6 +242,23 @@ int main(int argc, char* argv[]) {
     }
 
     openmirror::App app;
+
+    // If the user enabled "Identify as <ComputerName>" in the Settings panel
+    // and didn't pass an explicit --name, build the service name from the
+    // local computer name. Helps disambiguate multiple instances on the same
+    // network. Setting takes effect at next launch.
+    if (!name_overridden) {
+        auto s = openmirror::Settings::load();
+        if (s.use_computer_name) {
+#ifdef _WIN32
+            char buf[MAX_COMPUTERNAME_LENGTH + 1] = {};
+            DWORD len = sizeof(buf);
+            if (GetComputerNameA(buf, &len) && len > 0) {
+                config.name = std::string("1PhoneMirror by ") + buf;
+            }
+#endif
+        }
+    }
 
     if (!app.init(config)) {
         std::cerr << "Failed to initialize 1PhoneMirror\n";
