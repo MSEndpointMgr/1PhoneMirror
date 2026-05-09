@@ -113,90 +113,137 @@ Wait for the moderator at `microsoft/winget-pkgs` to merge the PR (usually a few
 
 ## Standard release routine (every new version)
 
+> **Current status (2026-05):** `PUBLIC_RELEASE_TOKEN` has not been approved by
+> the MSEndpointMgr org, so the automated release workflow cannot push to the
+> public repo. **Until that PAT is approved, use the manual routine below.**
+> The fully-automated routine is documented further down for the day approval lands.
+
 ### Step 1 — Bump the version
 
 Edit [`CMakeLists.txt`](CMakeLists.txt):
 ```cmake
-project(1PhoneMirror VERSION 0.2.1 LANGUAGES C CXX)
+project(1PhoneMirror VERSION 0.2.5 LANGUAGES C CXX)
 ```
 
-Add a one-liner to the version-history panel in [`src/media/renderer.cpp`](src/media/renderer.cpp) (find the `version_lines_` block and add a new entry at the top).
+Update version strings in [`src/media/renderer.cpp`](src/media/renderer.cpp):
+- Footer line 2 (`footer_line2_.push_back(seg(L" \u00B7 v0.2.5", ...`)
+- Info panel header (`info_lines_.push_back(make_info(L"1PhoneMirror v0.2.5", ...`)
+- Add a new entry at the top of the `version_lines_` block (date – version + one-liner)
 
-Commit:
+### Step 2 — Build the MSI locally
+
+```powershell
+Stop-Process -Name 1PhoneMirror -Force -ErrorAction SilentlyContinue
+.\package.ps1
+# Produces dist\1PhoneMirror-0.2.5.msi
+```
+
+Smoke-test: install, launch, exercise core features, uninstall.
+
+### Step 3 — Commit, tag, push
+
 ```powershell
 git add CMakeLists.txt src/media/renderer.cpp
-git commit -m "release: 0.2.1"
-git push
+git commit -m "release: 0.2.5 - <short summary>"
+git tag v0.2.5
+git push origin main
+git push origin v0.2.5
 ```
 
-### Step 2 — Tag and push
+> The release CI workflow will trigger on the tag and currently fail at the
+> cross-repo publish step (HTTP 403). Ignore that failure — the manual upload
+> below replaces it.
+
+### Step 4 — Publish the MSI to the public repo (manual)
+
+Requires a `gh` login on an account with **Write** access to
+`MSEndpointMgr/1PhoneMirror` (`gh auth status` should show scope `repo`).
 
 ```powershell
-git tag v0.2.1
-git push origin v0.2.1
+gh release create v0.2.5 "dist\1PhoneMirror-0.2.5.msi" `
+    --repo MSEndpointMgr/1PhoneMirror `
+    --title "1PhoneMirror 0.2.5" `
+    --notes "<release notes>"
 ```
 
-This triggers `.github/workflows/release.yml`:
+Verify the asset is reachable (winget will download from here):
 
-1. Spins up `windows-latest`
-2. Restores vcpkg cache (or builds FFmpeg/SDL2/OpenSSL on cache miss — slow first time)
-3. Runs `package.ps1 -Version 0.2.1`
-4. Computes SHA256
-5. **Publishes the MSI to `MSEndpointMgr/1PhoneMirror` Releases as `v0.2.1`** using `PUBLIC_RELEASE_TOKEN`
-
-Watch progress: **Actions** tab → "Build & Release MSI".
-
-> No release is created in the private source repo. Only the public repo
-> hosts release assets.
-
-### Step 3 — winget PR opens automatically
-
-When the **private** repo's release workflow finishes (which also publishes
-the public release), `.github/workflows/winget.yml` fires `winget-releaser`,
-which:
-
-1. Waits until the public asset is reachable
-2. Downloads the MSI from `MSEndpointMgr/1PhoneMirror/releases/v0.2.1`
-3. Computes its hash
-4. Forks `microsoft/winget-pkgs` (or reuses the existing fork)
-5. Generates updated manifests under `manifests/m/MSEndpointMgr/1PhoneMirror/0.2.1/`
-6. Opens a PR in `microsoft/winget-pkgs`
-
-Check **Actions** → "Submit to winget" for the PR URL.
-
-### Step 4 — Wait for merge
-
-Microsoft's bot validates and a moderator reviews. Usually merged within hours for established packages. Monitor the PR for failure comments (e.g., installer URL unreachable, hash mismatch).
-
-Once merged:
 ```powershell
+$url = "https://github.com/MSEndpointMgr/1PhoneMirror/releases/download/v0.2.5/1PhoneMirror-0.2.5.msi"
+(Invoke-WebRequest -Uri $url -Method Head -MaximumRedirection 5).StatusCode  # expect 200
+(Get-FileHash "dist\1PhoneMirror-0.2.5.msi" -Algorithm SHA256).Hash
+```
+
+### Step 5 — Submit the winget update
+
+The package identifier `MSEndpointMgr.1PhoneMirror` is already in the
+catalog (first submission was 0.2.1), so use `wingetcreate update`. If your
+`gh` token has `repo` (or `public_repo`) scope, no `--token` argument is
+needed — `wingetcreate` uses it automatically.
+
+```powershell
+wingetcreate update MSEndpointMgr.1PhoneMirror `
+    --version 0.2.5 `
+    --urls "https://github.com/MSEndpointMgr/1PhoneMirror/releases/download/v0.2.5/1PhoneMirror-0.2.5.msi" `
+    --submit
+```
+
+Optional dry-run first (no PR opened, just generates and validates manifests
+under `.\manifests\`):
+
+```powershell
+wingetcreate update MSEndpointMgr.1PhoneMirror `
+    --version 0.2.5 `
+    --urls "https://github.com/MSEndpointMgr/1PhoneMirror/releases/download/v0.2.5/1PhoneMirror-0.2.5.msi" `
+    --out .\manifests\
+winget validate .\manifests\manifests\m\MSEndpointMgr\1PhoneMirror\0.2.5\
+```
+
+### Step 6 — Watch the PR and wait for merge
+
+```powershell
+gh pr list --repo microsoft/winget-pkgs --search "MSEndpointMgr.1PhoneMirror 0.2.5" --state all
+```
+
+Microsoft's bot validates automatically; a moderator merges (usually within
+hours for established packages). Monitor for failure comments (installer URL
+unreachable, hash mismatch).
+
+### Step 7 — Verify availability
+
+Once the PR is merged, the manifest is picked up by the next index rebuild.
+Typical propagation:
+
+- **`winget` CLI** — usually 15–60 minutes after merge
+- **winget.run / winstall.app** — a few hours
+- **Microsoft Store surface** — up to 24–48 hours
+
+```powershell
+winget source update
 winget search MSEndpointMgr.1PhoneMirror
-winget install MSEndpointMgr.1PhoneMirror
+winget show MSEndpointMgr.1PhoneMirror
 ```
 
 ---
 
-## Manual fallback
+## Fully-automated routine (when `PUBLIC_RELEASE_TOKEN` is approved)
 
-If the automated workflow fails, rebuild and submit locally:
+Once an MSEndpointMgr org admin approves the fine-grained PAT (or you replace
+it with a classic PAT that has org access), the workflow takes over from the
+tag push:
 
-```powershell
-# Build & package
-.\package.ps1                    # produces dist\1PhoneMirror-X.Y.Z.msi
+1. `git tag v0.2.x && git push origin v0.2.x`
+2. `.github/workflows/release.yml` runs on `windows-latest`, restores vcpkg
+   cache, runs `package.ps1 -Version 0.2.x`, computes SHA256, and pushes the
+   MSI to `MSEndpointMgr/1PhoneMirror/releases/v0.2.x` using
+   `PUBLIC_RELEASE_TOKEN`.
+3. `.github/workflows/winget.yml` fires `winget-releaser`, which downloads
+   the public MSI, generates updated manifests, forks `microsoft/winget-pkgs`,
+   and opens a PR — using `WINGET_TOKEN`.
 
-# Upload to a manually created GitHub Release in the PUBLIC repo
-gh release create v0.2.1 dist\1PhoneMirror-0.2.1.msi `
-    --repo MSEndpointMgr/1PhoneMirror `
-    --title "1PhoneMirror 0.2.1" `
-    --generate-notes
-
-# Submit winget update
-wingetcreate update MSEndpointMgr.1PhoneMirror `
-    --version 0.2.1 `
-    --urls https://github.com/MSEndpointMgr/1PhoneMirror/releases/download/v0.2.1/1PhoneMirror-0.2.1.msi `
-    --submit `
-    --token <PAT>
-```
+Watch progress under the **Actions** tab. If the publish step fails again
+with `HTTP 403: Resource not accessible by personal access token`, the PAT
+is still not approved — fall back to the manual routine.
 
 ---
 
@@ -221,6 +268,7 @@ wingetcreate update MSEndpointMgr.1PhoneMirror `
 | Changing `UpgradeCode` | Users get duplicate installs instead of upgrade | Never edit it — keep the GUID |
 | Editing manifests in your fork while a PR is open | Conflicts | Let the workflow drive it; if needed, close the PR and rerun |
 | First-time identifier never approved | Auto path can't run | See "One-time setup" — do `wingetcreate new` first |
+| `PUBLIC_RELEASE_TOKEN` not approved by org | `release.yml` fails: `HTTP 403: Resource not accessible by personal access token` | Use the manual routine (Step 4 onwards) until org admin approves the PAT |
 
 ---
 
