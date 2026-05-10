@@ -469,7 +469,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         footer_line1_.push_back(seg(L"1PhoneMirror by ", 120, 120, 120));
         footer_line1_.push_back(seg(L"MSEndpointMgr", 120, 120, 120,
                                      "https://msendpointmgr.com/", "Open MSEndpointMgr"));
-        // Line 2: "(c) 2026 \u266B Simon Skotheimsvik, MVP \u00B7 v0.3.1"
+        // Line 2: "(c) 2026 \u266B Simon Skotheimsvik, MVP \u00B7 v0.3.2"
         footer_line2_.push_back(seg(L"\u00A9 2026 ", 100, 100, 100));
         // Beamed-eighth-notes glyph — render via Segoe UI Symbol so it works
         // on Windows builds where the regular Segoe UI font lacks U+266B.
@@ -487,7 +487,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
                                      "https://buymeacoffee.com/simonskothn",
                                      "Buy me a coffee",
                                      L"Segoe UI Symbol"));
-        footer_line2_.push_back(seg(L" \u00B7 v0.3.1", 100, 100, 100,
+        footer_line2_.push_back(seg(L" \u00B7 v0.3.2", 100, 100, 100,
                                      "", "Version history (V)"));
     }
 #endif
@@ -501,7 +501,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
             line.tex = make_text_texture_w(sdl_renderer_, text, font_sz, r, g, b, &line.w, &line.h);
             return line;
         };
-        info_lines_.push_back(make_info(L"1PhoneMirror v0.3.1", 44, 255, 255, 255));
+        info_lines_.push_back(make_info(L"1PhoneMirror v0.3.2", 44, 255, 255, 255));
         info_lines_.push_back(make_info(L"AirPlay (iOS) \u00B7 scrcpy (Android)", 34, 160, 160, 160));
         info_lines_.push_back({nullptr, 0, 0}); // spacer
         info_lines_.push_back(make_info(L"(F) Fullscreen \u00B7 (M) Menu \u00B7 (L) Log \u00B7 (A) Add Android", 30, 130, 130, 130));
@@ -527,6 +527,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
+        version_lines_.push_back(make_ver(L"10.05.2026 \u2013 0.3.2", 34, 200, 200, 255));
+        version_lines_.push_back(make_ver(L"User interface fixes", 30, 160, 160, 160));
+        version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"10.05.2026 \u2013 0.3.1", 34, 200, 200, 255));
         version_lines_.push_back(make_ver(L"Phone frame on recordings (rounded corners, transparent on GIF)", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
