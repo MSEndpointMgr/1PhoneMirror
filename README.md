@@ -29,7 +29,14 @@ re-edit by hand. So I wrote my own. **1PhoneMirror** is the result —
 a no-install, no-cable mirror that drops a properly-framed phone image
 straight into your screenshots and recordings, ready to paste into a
 guide, a Loop page, or a slide deck.
+## Screenshots
 
+| | |
+|---|---|
+| ![Waiting for a connection](docs/screenshots/01-waiting.png) | ![Info panel](docs/screenshots/02-info-panel.png) |
+| **Idle screen** — quick reminders for AirPlay (iOS) and Wireless debugging (Android), with the framed phone window ready to receive. | **Info panel** (`I`) — version, shortcuts, network requirements, and a one-click "Copy network test script" for IT validation. |
+| ![Settings panel](docs/screenshots/03-settings-panel.png) | ![Log viewer](docs/screenshots/04-log-viewer.png) |
+| **Settings panel** (`S`) — bezel colour swatches, screenshot/clipboard toggles, computer-name identity, and the MP4 / GIF recording-format selector. | **Log viewer** (`L`) — live activity drawer slides out to the right, perfect for debugging AirPlay handshakes or Android pairing. |
 ## Architecture
 
 ```
