@@ -29,7 +29,7 @@ if (-not $SkipVcpkg) {
 Write-Host "`n[2/4] Installing C++ libraries via vcpkg..." -ForegroundColor Yellow
 
 $packages = @(
-    "ffmpeg[avcodec,avformat,swscale,swresample]:x64-windows",
+    "ffmpeg[avcodec,avformat,avfilter,swscale,swresample,gpl,x264]:x64-windows",
     "sdl2:x64-windows",
     "openssl:x64-windows"
 )

@@ -27,3 +27,5 @@ compile_commands.json
 
 crash_pin.log
 *.log
+manifests/
+ffmpeg-rebuild.log

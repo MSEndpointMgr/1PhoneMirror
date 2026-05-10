@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(1PhoneMirror VERSION 0.2.5 LANGUAGES C CXX)
+project(1PhoneMirror VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -39,6 +39,7 @@ set(MEDIA_SOURCES
     src/media/renderer.cpp
     src/media/audio_output.cpp
     src/media/phone_frame.cpp
+    src/media/recorder.cpp
 )
 
 set(NETWORK_SOURCES

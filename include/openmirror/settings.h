@@ -17,6 +17,13 @@ struct Settings {
     bool screenshot_save_to_folder = true;
     bool screenshot_copy_to_clipboard = true;
 
+    // Recording behaviour. format: 0 = MP4 (H.264), 1 = GIF.
+    int  record_format = 0;
+    int  record_max_duration_sec = 60;  // 0 = unlimited
+    int  record_fps_mp4 = 30;
+    int  record_fps_gif = 10;
+    int  record_bitrate_kbps = 6000;
+
     // When true, the AirPlay/Cast/Miracast service name advertises as
     // "1PhoneMirror by <COMPUTERNAME>" instead of
     // "1PhoneMirror by MSEndpointMgr". Useful when multiple instances run

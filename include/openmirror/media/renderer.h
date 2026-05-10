@@ -2,6 +2,7 @@
 
 #include <openmirror/media/decoder.h>
 #include <openmirror/media/phone_frame.h>
+#include <openmirror/media/recorder.h>
 #include <openmirror/settings.h>
 #include <atomic>
 #include <chrono>
@@ -85,6 +86,10 @@ private:
     void draw_info_panel();
     void take_screenshot();
     void open_screenshot_folder();
+    // Recording lifecycle helpers (called only from the renderer thread).
+    void start_recording();
+    void stop_recording();
+    std::string make_recording_path() const;
     void copy_to_clipboard(const uint8_t* rgba, int w, int h);
     void update_window_shape();
     void begin_window_drag();
@@ -108,6 +113,18 @@ private:
     PhoneFrame phone_frame_;
     bool phone_frame_enabled_ = true;
     bool screenshot_requested_ = false;
+    // Recording state. record_toggle_requested_ is set by the hotkey/click
+    // handler and consumed in render_frame() so encoder init runs on the
+    // renderer thread (same place as screenshot capture).
+    Recorder recorder_;
+    bool record_toggle_requested_ = false;
+    // Optional countdown before recording starts (right-click menu "Start
+    // in 5s"). When > 0, render_frame() shows a countdown HUD and starts
+    // recording when it reaches 0.
+    int  record_countdown_ms_ = 0;
+    std::chrono::steady_clock::time_point record_countdown_start_;
+    // Optional fixed-length recording (5/10/15 s). 0 = open-ended.
+    int  pending_record_duration_sec_ = 0;
     bool window_shape_set_ = false;
     int  window_shape_last_lp_w_ = -1; // pixel width of drawer region when last applied
     int  window_shape_last_frame_w_ = -1;
@@ -124,6 +141,11 @@ private:
     // Mini close (X) button drawn in the top bezel when the island menu is
     // hidden — same stroke aesthetic as the menu/log chevrons.
     BtnRect bezel_close_btn_;
+    // Bezel record button — sits to the right of the screenshot button in
+    // the menu strip and (when collapsed) in the top bezel. Same hit-rect
+    // pattern as bezel_screenshot_btn_.
+    BtnRect record_btn_;
+    BtnRect bezel_record_btn_;
     int hover_btn_ = -1; // -1=none, 0=close, 1=screenshot, 2=folder, 3=icon, 4=info, 5=menu, 6=settings
 
     // Island visibility & animation
@@ -263,6 +285,8 @@ private:
     BtnRect settings_toggle_save_btn_;
     BtnRect settings_toggle_clip_btn_;
     BtnRect settings_toggle_compname_btn_;
+    BtnRect settings_fmt_mp4_btn_;
+    BtnRect settings_fmt_gif_btn_;
     void draw_settings_panel();
     void apply_bezel_color(uint8_t r, uint8_t g, uint8_t b);
     // Drawer / sub-panel base colour derived from the current bezel colour

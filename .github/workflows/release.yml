@@ -79,7 +79,7 @@ jobs:
           }
           Write-Host "Using vcpkg at $vcpkgRoot"
           & (Join-Path $vcpkgRoot 'vcpkg.exe') install `
-            "ffmpeg[avcodec,avformat,swscale,swresample]:x64-windows" `
+            "ffmpeg[avcodec,avformat,avfilter,swscale,swresample,gpl,x264]:x64-windows" `
             "sdl2:x64-windows" `
             "openssl:x64-windows" `
             --recurse

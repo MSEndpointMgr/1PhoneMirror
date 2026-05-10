@@ -469,7 +469,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         footer_line1_.push_back(seg(L"1PhoneMirror by ", 120, 120, 120));
         footer_line1_.push_back(seg(L"MSEndpointMgr", 120, 120, 120,
                                      "https://msendpointmgr.com/", "Open MSEndpointMgr"));
-        // Line 2: "(c) 2026 \u266B Simon Skotheimsvik, MVP \u00B7 v0.2.5"
+        // Line 2: "(c) 2026 \u266B Simon Skotheimsvik, MVP \u00B7 v0.3.0"
         footer_line2_.push_back(seg(L"\u00A9 2026 ", 100, 100, 100));
         // Beamed-eighth-notes glyph — render via Segoe UI Symbol so it works
         // on Windows builds where the regular Segoe UI font lacks U+266B.
@@ -479,7 +479,15 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         footer_line2_.push_back(seg(L" ", 100, 100, 100));
         footer_line2_.push_back(seg(L"Simon Skotheimsvik, MVP", 100, 100, 100,
                                      "https://linktr.ee/simonskotheimsvik", "More info of Simon"));
-        footer_line2_.push_back(seg(L" \u00B7 v0.2.5", 100, 100, 100,
+        // Buy-me-a-coffee link — yellow coffee glyph (U+2615) sandwiched
+        // between the author name and the version number. Rendered via
+        // Segoe UI Symbol/Emoji so the glyph is present on stock Windows.
+        footer_line2_.push_back(seg(L" ", 100, 100, 100));
+        footer_line2_.push_back(seg(L"\u2615", 230, 200, 60,
+                                     "https://buymeacoffee.com/simonskothn",
+                                     "Buy me a coffee",
+                                     L"Segoe UI Symbol"));
+        footer_line2_.push_back(seg(L" \u00B7 v0.3.0", 100, 100, 100,
                                      "", "Version history (V)"));
     }
 #endif
@@ -493,7 +501,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
             line.tex = make_text_texture_w(sdl_renderer_, text, font_sz, r, g, b, &line.w, &line.h);
             return line;
         };
-        info_lines_.push_back(make_info(L"1PhoneMirror v0.2.5", 44, 255, 255, 255));
+        info_lines_.push_back(make_info(L"1PhoneMirror v0.3.0", 44, 255, 255, 255));
         info_lines_.push_back(make_info(L"AirPlay (iOS) \u00B7 scrcpy (Android)", 34, 160, 160, 160));
         info_lines_.push_back({nullptr, 0, 0}); // spacer
         info_lines_.push_back(make_info(L"(F) Fullscreen \u00B7 (M) Menu \u00B7 (L) Log \u00B7 (A) Add Android", 30, 130, 130, 130));
@@ -519,6 +527,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
+        version_lines_.push_back(make_ver(L"10.05.2026 \u2013 0.3.0", 34, 200, 200, 255));
+        version_lines_.push_back(make_ver(L"Screen recording: MP4/GIF, Ctrl+R, right-click for delay/timed", 30, 160, 160, 160));
+        version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"09.05.2026 \u2013 0.2.5", 34, 200, 200, 255));
         version_lines_.push_back(make_ver(L"Info panel: copy network test PowerShell script (with MDM check)", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
@@ -581,6 +592,10 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
 
 void Renderer::shutdown() {
     running_.store(false);
+    if (recorder_.is_recording()) {
+        std::cout << "[Recorder] Finalising on shutdown\n";
+        recorder_.stop();
+    }
     for (auto& s : footer_line1_) { if (s.tex) SDL_DestroyTexture(s.tex); }
     for (auto& s : footer_line2_) { if (s.tex) SDL_DestroyTexture(s.tex); }
     footer_line1_.clear();
@@ -797,6 +812,12 @@ void Renderer::run() {
                     btn_flash_ = true;
                     btn_flash_start_ = std::chrono::steady_clock::now();
                 }
+                // Ctrl+R toggles screen recording.
+                if (event.key.keysym.sym == SDLK_r && (event.key.keysym.mod & KMOD_CTRL)) {
+                    record_toggle_requested_ = true;
+                    btn_flash_ = true;
+                    btn_flash_start_ = std::chrono::steady_clock::now();
+                }
                 // Plain (S) without Ctrl toggles the Settings panel.
                 if (event.key.keysym.sym == SDLK_s && !(event.key.keysym.mod & KMOD_CTRL)) {
                     settings_panel_visible_ = !settings_panel_visible_;
@@ -933,6 +954,13 @@ void Renderer::run() {
                     } else if (log_btn_.w > 0 && in_rect(mx, my, log_btn_.x, log_btn_.y,
                                                           log_btn_.w, log_btn_.h)) {
                         target = "log";
+                    } else if (record_btn_.w > 0 && in_rect(mx, my, record_btn_.x, record_btn_.y,
+                                                              record_btn_.w, record_btn_.h)) {
+                        target = "record";
+                    } else if (bezel_record_btn_.w > 0 &&
+                               in_rect(mx, my, bezel_record_btn_.x, bezel_record_btn_.y,
+                                       bezel_record_btn_.w, bezel_record_btn_.h)) {
+                        target = "record";
                     } else {
                         for (auto& [id, r] : source_btns_) {
                             if (r.w > 0 && in_rect(mx, my, r.x, r.y, r.w, r.h)) {
@@ -994,6 +1022,31 @@ void Renderer::run() {
                             } else if (clicked_action == "clear") {
                                 openmirror::LogBuffer::instance().clear();
                                 std::cout << "[Renderer] Log cleared\n";
+                            } else if (tgt == "record") {
+                                if (clicked_action == "start") {
+                                    pending_record_duration_sec_ = 0;
+                                    record_countdown_ms_ = 0;
+                                    record_toggle_requested_ = true;
+                                } else if (clicked_action == "stop" ||
+                                           clicked_action == "cancel") {
+                                    record_toggle_requested_ = true;
+                                } else if (clicked_action == "delay5") {
+                                    pending_record_duration_sec_ = 0;
+                                    record_countdown_ms_ = 5000;
+                                    record_toggle_requested_ = true;
+                                } else if (clicked_action == "timed5") {
+                                    pending_record_duration_sec_ = 5;
+                                    record_countdown_ms_ = 0;
+                                    record_toggle_requested_ = true;
+                                } else if (clicked_action == "timed10") {
+                                    pending_record_duration_sec_ = 10;
+                                    record_countdown_ms_ = 0;
+                                    record_toggle_requested_ = true;
+                                } else if (clicked_action == "timed15") {
+                                    pending_record_duration_sec_ = 15;
+                                    record_countdown_ms_ = 0;
+                                    record_toggle_requested_ = true;
+                                }
                             }
                             break;
                         }
@@ -1068,6 +1121,17 @@ void Renderer::run() {
                         in_rect(mx, my, bezel_screenshot_btn_.x, bezel_screenshot_btn_.y,
                                 bezel_screenshot_btn_.w, bezel_screenshot_btn_.h)) {
                         screenshot_requested_ = true;
+                        btn_flash_ = true;
+                        btn_flash_start_ = std::chrono::steady_clock::now();
+                        break;
+                    }
+
+                    // Bezel record button (only present when the menu is
+                    // hidden — same effect as Ctrl+R / island record).
+                    if (bezel_record_btn_.w > 0 &&
+                        in_rect(mx, my, bezel_record_btn_.x, bezel_record_btn_.y,
+                                bezel_record_btn_.w, bezel_record_btn_.h)) {
+                        record_toggle_requested_ = true;
                         btn_flash_ = true;
                         btn_flash_start_ = std::chrono::steady_clock::now();
                         break;
@@ -1215,6 +1279,18 @@ void Renderer::run() {
                                 settings_.use_computer_name = !settings_.use_computer_name;
                                 settings_.save();
                             }
+                            if (settings_fmt_mp4_btn_.w > 0 &&
+                                in_rect(mx, my, settings_fmt_mp4_btn_.x, settings_fmt_mp4_btn_.y,
+                                        settings_fmt_mp4_btn_.w, settings_fmt_mp4_btn_.h)) {
+                                settings_.record_format = 0;
+                                settings_.save();
+                            }
+                            if (settings_fmt_gif_btn_.w > 0 &&
+                                in_rect(mx, my, settings_fmt_gif_btn_.x, settings_fmt_gif_btn_.y,
+                                        settings_fmt_gif_btn_.w, settings_fmt_gif_btn_.h)) {
+                                settings_.record_format = 1;
+                                settings_.save();
+                            }
                             break;
                         } else {
                             // Click outside the open settings panel closes it.
@@ -1228,6 +1304,15 @@ void Renderer::run() {
                     if (in_rect(mx, my, screenshot_btn_.x, screenshot_btn_.y,
                                 screenshot_btn_.w, screenshot_btn_.h)) {
                         screenshot_requested_ = true;
+                        btn_flash_ = true;
+                        btn_flash_start_ = std::chrono::steady_clock::now();
+                        break;
+                    }
+                    // Record button (toggle / cancel countdown)
+                    if (record_btn_.w > 0 &&
+                        in_rect(mx, my, record_btn_.x, record_btn_.y,
+                                record_btn_.w, record_btn_.h)) {
+                        record_toggle_requested_ = true;
                         btn_flash_ = true;
                         btn_flash_start_ = std::chrono::steady_clock::now();
                         break;
@@ -1512,6 +1597,7 @@ void Renderer::render_frame() {
                         (int)(tex_width_ * sc), (int)(tex_height_ * sc)};
         SDL_RenderCopy(sdl_renderer_, texture_, nullptr, &dst);
         close_btn_ = screenshot_btn_ = folder_btn_ = icon_btn_ = {};
+        record_btn_ = {};
         resize_grip_ = {};
         frame_dst_w_ = 0;
         SDL_RenderPresent(sdl_renderer_);
@@ -1673,6 +1759,88 @@ void Renderer::render_frame() {
     // Phone frame overlay (on top — covers island and panel edges)
     phone_frame_.render(sdl_renderer_, frame_dst_x_, frame_dst_y_, frame_dst_w_, frame_dst_h_);
 
+    // Recording HUD — countdown digit while waiting, "REC + elapsed" chip
+    // while recording. Drawn on the screen content (under phone bezel) but
+    // above the video itself.
+    if (record_countdown_ms_ > 0 && !recorder_.is_recording() && tex_width_ > 0) {
+        auto cd_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - record_countdown_start_).count();
+        int remaining = std::max(0, (record_countdown_ms_ - (int)cd_elapsed + 999) / 1000);
+        char buf[8]; std::snprintf(buf, sizeof(buf), "%d", remaining);
+        int big = std::max(64, frame_dst_w_ / 4);
+        int tw = 0, th = 0;
+        SDL_Texture* t = make_text_texture(sdl_renderer_, buf, big,
+                                           255, 255, 255, &tw, &th);
+        if (t) {
+            // Pulse pop on each second tick.
+            int phase_ms = (int)(cd_elapsed % 1000);
+            float pop = 1.0f + 0.15f * std::max(0.0f, 1.0f - phase_ms / 250.0f);
+            int dw = (int)(tw * pop), dh = (int)(th * pop);
+            int cx = frame_dst_x_ + frame_dst_w_ / 2;
+            int cy = frame_dst_y_ + frame_dst_h_ / 2;
+            // Frosty circular backdrop — partly transparent so the
+            // mirrored content remains visible behind the digit. Soft
+            // outer halo + main translucent disc + faint inner highlight.
+            int radius = (int)(std::max(dw, dh) * 0.85f);
+            SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
+            for (int rr = radius + radius / 4; rr > radius; --rr) {
+                uint8_t a = (uint8_t)(20 * (radius + radius / 4 - rr) / std::max(1, radius / 4));
+                SDL_SetRenderDrawColor(sdl_renderer_, 20, 20, 30, a);
+                fill_circle(sdl_renderer_, cx, cy, rr);
+            }
+            // Main frosted disc — alpha ~95/255 keeps the underlying
+            // mirror legible while still floating the digit visually.
+            SDL_SetRenderDrawColor(sdl_renderer_, 28, 30, 40, 95);
+            fill_circle(sdl_renderer_, cx, cy, radius);
+            // Subtle inner highlight ring for a glassy edge.
+            int ring_r = radius - std::max(2, radius / 18);
+            SDL_SetRenderDrawColor(sdl_renderer_, 200, 210, 230, 45);
+            for (int rr = ring_r; rr >= ring_r - 1 && rr > 0; --rr) {
+                for (int dy = -rr; dy <= rr; ++dy) {
+                    for (int dx = -rr; dx <= rr; ++dx) {
+                        int d2 = dx * dx + dy * dy;
+                        if (d2 <= rr * rr && d2 >= (rr - 1) * (rr - 1))
+                            SDL_RenderDrawPoint(sdl_renderer_, cx + dx, cy + dy);
+                    }
+                }
+            }
+            SDL_Rect dst{cx - dw / 2, cy - dh / 2, dw, dh};
+            SDL_RenderCopy(sdl_renderer_, t, nullptr, &dst);
+            SDL_DestroyTexture(t);
+        }
+    } else if (recorder_.is_recording() && tex_width_ > 0) {
+        int s = (int)recorder_.elapsed_seconds();
+        char buf[64]; std::snprintf(buf, sizeof(buf), "REC  %d:%02d", s / 60, s % 60);
+        int fh = std::max(14, frame_dst_w_ / 28);
+        int tw = 0, th = 0;
+        SDL_Texture* t = make_text_texture(sdl_renderer_, buf, fh,
+                                           255, 240, 240, &tw, &th);
+        if (t) {
+            int pad_ = std::max(6, fh / 2);
+            int chip_w = tw + pad_ * 2 + fh; // extra room for the dot
+            int chip_h = th + pad_;
+            int chip_x = frame_dst_x_ + std::max(8, frame_dst_w_ / 24);
+            int chip_y = frame_dst_y_ + std::max(8, frame_dst_h_ / 28);
+            // Pulsing red background.
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            float pulse = 0.55f + 0.45f * (float)std::abs(std::sin(ms * 0.005));
+            SDL_SetRenderDrawColor(sdl_renderer_,
+                                   (uint8_t)(180 * pulse + 50), 30, 30, 220);
+            SDL_Rect chip{chip_x, chip_y, chip_w, chip_h};
+            SDL_RenderFillRect(sdl_renderer_, &chip);
+            // Filled dot to the left of the text.
+            int dot_r = th / 3;
+            SDL_SetRenderDrawColor(sdl_renderer_, 255, 255, 255, 230);
+            fill_circle(sdl_renderer_, chip_x + pad_ + dot_r,
+                        chip_y + chip_h / 2, dot_r);
+            SDL_Rect td{chip_x + pad_ + dot_r * 2 + pad_ / 2,
+                        chip_y + (chip_h - th) / 2, tw, th};
+            SDL_RenderCopy(sdl_renderer_, t, nullptr, &td);
+            SDL_DestroyTexture(t);
+        }
+    }
+
     // Log panel (slides out to the left)
     if (log_panel_anim_ > 0.01f) draw_log_panel();
 
@@ -1743,6 +1911,7 @@ void Renderer::render_frame() {
     // the affordance feels continuous when the menu is toggled.
     bezel_screenshot_btn_ = {};
     bezel_close_btn_ = {};
+    bezel_record_btn_ = {};
     if (island_anim_ < 0.5f) {
         float scale_b = (float)frame_dst_w_ / phone_frame_.frame_width();
         int bezel_top = (int)(phone_frame_.screen_y() * scale_b);
@@ -1756,10 +1925,13 @@ void Renderer::render_frame() {
         int gap_full = pad_full / 2 + 2;
         int island_w = std::max(160, (int)(phone_eq_w * 0.80f));
         int island_x = svx_b + (svw_b - island_w) / 2;
-        // Order on the island (right→left): close, folder, screenshot.
+        // Order on the island (right→left): close, folder, record, screenshot.
         int ss_full_x = island_x + island_w - pad_full - btn_sz_full
-                       - 2 * (btn_sz_full + gap_full);
+                       - 3 * (btn_sz_full + gap_full);
         int ss_full_cx = ss_full_x + btn_sz_full / 2;
+        int rec_full_x = island_x + island_w - pad_full - btn_sz_full
+                        - 2 * (btn_sz_full + gap_full);
+        int rec_full_cx = rec_full_x + btn_sz_full / 2;
 
         // Mini button — sized to fit inside the top bezel with breathing room.
         int mini_sz = std::max(12, std::min(btn_sz_full * 2 / 3, bezel_top - 4));
@@ -1780,27 +1952,80 @@ void Renderer::render_frame() {
         SDL_SetRenderDrawColor(sdl_renderer_, bg, bg, bg + 5, bhov || flashing_b ? 200 : 130);
         fill_circle(sdl_renderer_, mini_x + mini_sz / 2,
                     mini_y + mini_sz / 2, mini_sz / 2);
-        // Camera glyph — same recipe as the island button (ring + center dot).
+        // White filled-dot glyph — matches the island screenshot button so
+        // the affordance reads identically whether the menu is up or down.
         int cr = std::max(2, mini_sz / 4);
         int ccx = mini_x + mini_sz / 2;
         int ccy = mini_y + mini_sz / 2;
-        uint8_t ca = flashing_b ? 255 : (bhov ? 255 : 200);
-        SDL_SetRenderDrawColor(sdl_renderer_, 255, 255, 255, ca);
-        for (int dy = -cr; dy <= cr; dy++) {
-            for (int dx = -cr; dx <= cr; dx++) {
-                int d2 = dx * dx + dy * dy;
-                if (d2 <= cr * cr && d2 >= (cr - 1) * (cr - 1))
-                    SDL_RenderDrawPoint(sdl_renderer_, ccx + dx, ccy + dy);
-            }
-        }
-        int dot = std::max(1, cr / 3);
-        fill_circle(sdl_renderer_, ccx, ccy, dot);
+        uint8_t ca = flashing_b ? 255 : (bhov ? 255 : 220);
+        SDL_SetRenderDrawColor(sdl_renderer_, 240, 240, 240, ca);
+        fill_circle(sdl_renderer_, ccx, ccy, cr);
 
         if (bhov) {
             bezel_hover_key = "bezel_ss";
             bezel_hover_text = "Screenshot (Ctrl+S)";
             bezel_hover_ax = ccx;
             bezel_hover_ay = mini_y + mini_sz + 4;
+        }
+
+        // Bezel record button — same horizontal position as the island
+        // record button, same red filled-dot / square language.
+        int rec_mini_x = rec_full_cx - mini_sz / 2;
+        int rec_mini_y = mini_y;
+        bezel_record_btn_ = {rec_mini_x, rec_mini_y, mini_sz, mini_sz};
+        bool rhov = in_rect(bmx, bmy, rec_mini_x, rec_mini_y, mini_sz, mini_sz);
+        bool rec_active_b = recorder_.is_recording();
+        bool rec_count_b  = (record_countdown_ms_ > 0 && !rec_active_b);
+        float rec_pulse_b = 1.0f;
+        if (rec_active_b) {
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now_b.time_since_epoch()).count();
+            rec_pulse_b = 0.55f + 0.45f * (float)std::abs(std::sin(ms * 0.005));
+        }
+        uint8_t rbg_r = rec_active_b ? (uint8_t)(110 * rec_pulse_b + 60)
+                                     : (rhov ? 80 : 40);
+        uint8_t rbg_g = rhov ? 35 : 35;
+        uint8_t rbg_b = rhov ? 35 : 40;
+        SDL_SetRenderDrawColor(sdl_renderer_, rbg_r, rbg_g, rbg_b,
+                               rhov || rec_active_b ? 200 : 130);
+        fill_circle(sdl_renderer_, rec_mini_x + mini_sz / 2,
+                    rec_mini_y + mini_sz / 2, mini_sz / 2);
+        int rrr = std::max(2, mini_sz / 4);
+        int rrcx = rec_mini_x + mini_sz / 2;
+        int rrcy = rec_mini_y + mini_sz / 2;
+        uint8_t ra = rec_active_b ? 255 : (rhov ? 240 : 210);
+        SDL_SetRenderDrawColor(sdl_renderer_, 235, 80, 80, ra);
+        if (rec_active_b) {
+            SDL_Rect sqr{rrcx - rrr, rrcy - rrr, rrr * 2, rrr * 2};
+            SDL_RenderFillRect(sdl_renderer_, &sqr);
+        } else {
+            fill_circle(sdl_renderer_, rrcx, rrcy, rrr);
+            if (rec_count_b) {
+                int ring = rrr + 2;
+                SDL_SetRenderDrawColor(sdl_renderer_, 240, 240, 240, 220);
+                for (int dy = -ring; dy <= ring; dy++) {
+                    for (int dx = -ring; dx <= ring; dx++) {
+                        int d2 = dx * dx + dy * dy;
+                        if (d2 <= ring * ring && d2 >= (ring - 1) * (ring - 1))
+                            SDL_RenderDrawPoint(sdl_renderer_, rrcx + dx, rrcy + dy);
+                    }
+                }
+            }
+        }
+        if (rhov) {
+            bezel_hover_key = "bezel_rec";
+            if (rec_active_b) {
+                int s = (int)recorder_.elapsed_seconds();
+                static char rb[64];
+                std::snprintf(rb, sizeof(rb), "Stop recording - %d:%02d (Ctrl+R)", s / 60, s % 60);
+                bezel_hover_text = rb;
+            } else if (rec_count_b) {
+                bezel_hover_text = "Cancel countdown";
+            } else {
+                bezel_hover_text = "Record (Ctrl+R)\nRight-click for delay/timed";
+            }
+            bezel_hover_ax = rrcx;
+            bezel_hover_ay = rec_mini_y + mini_sz + 4;
         }
 
         // Bezel close button — same vertical/horizontal placement strategy
@@ -2109,6 +2334,20 @@ void Renderer::render_frame() {
                 }
             }
             items.push_back({"disconnect", "Disconnect " + name});
+        } else if (bezel_menu_target_ == "record") {
+            const bool active = recorder_.is_recording();
+            const bool counting = (record_countdown_ms_ > 0 && !active);
+            if (active) {
+                items.push_back({"stop", "Stop recording (Ctrl+R)"});
+            } else if (counting) {
+                items.push_back({"cancel", "Cancel countdown"});
+            } else {
+                items.push_back({"start",   "Start now (Ctrl+R)"});
+                items.push_back({"delay5",  "Start in 5 s"});
+                items.push_back({"timed5",  "Record 5 s"});
+                items.push_back({"timed10", "Record 10 s"});
+                items.push_back({"timed15", "Record 15 s"});
+            }
         }
         if (items.empty()) {
             bezel_menu_visible_ = false;
@@ -2169,6 +2408,12 @@ void Renderer::render_frame() {
                 panel_x = bezel_menu_anchor_x_ - panel_w - 12;
                 panel_y = bezel_menu_anchor_y_ - panel_h / 2;
                 dx = (int)(panel_w * 0.3f);
+            } else if (bezel_menu_target_ == "record") {
+                // Record button lives in the top island — slide DOWN from
+                // the cursor so the menu doesn't crash into the window top.
+                panel_x = bezel_menu_anchor_x_ - panel_w / 2;
+                panel_y = bezel_menu_anchor_y_ + 12;
+                dy = -(int)(panel_h * 0.3f);
             } else {
                 // Sources (bottom) and fallback: slide up from the button.
                 panel_x = bezel_menu_anchor_x_ - panel_w / 2;
@@ -2253,6 +2498,43 @@ void Renderer::render_frame() {
     if (screenshot_requested_) {
         screenshot_requested_ = false;
         take_screenshot();
+    }
+
+    // ---- Recording lifecycle (after the present so we feed encoded frames
+    // immediately and any UI changes happen on the next loop) ----
+    if (record_toggle_requested_) {
+        record_toggle_requested_ = false;
+        if (recorder_.is_recording()) {
+            stop_recording();
+        } else if (record_countdown_ms_ > 0) {
+            record_countdown_start_ = std::chrono::steady_clock::now();
+        } else {
+            start_recording();
+        }
+    }
+
+    // Countdown -> start
+    if (record_countdown_ms_ > 0 && !recorder_.is_recording()) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - record_countdown_start_).count();
+        if (elapsed >= record_countdown_ms_) {
+            record_countdown_ms_ = 0;
+            start_recording();
+        }
+    }
+
+    // Push the latest composited frame to the recorder.
+    if (recorder_.is_recording() && !last_frame_data_.empty()) {
+        // Use the raw decoded frame (no phone bezel) to keep file size
+        // sensible. Phone-frame compositing is screenshot-only for now.
+        recorder_.push_frame(last_frame_data_.data(), last_frame_w_,
+                             last_frame_h_, last_frame_stride_);
+    }
+
+    // Recorder may have hit max-duration on the worker — finalise from the
+    // renderer thread so we own the toast/UI updates.
+    if (recorder_.should_finalize()) {
+        stop_recording();
     }
 }
 
@@ -2528,26 +2810,66 @@ void Renderer::draw_island() {
     SDL_Rect folder_tab = {fcx - fr, fcy - fr, fr, 2};
     SDL_RenderFillRect(sdl_renderer_, &folder_tab);
 
-    // Screenshot button
+    // Record button (to the right of the photo button — sits between
+    // folder and screenshot in the right-to-left cluster).
+    bx -= btn_sz + gap;
+    record_btn_ = {bx, by, btn_sz, btn_sz};
+    bool rec_hover = in_rect(mx, my, bx, by, btn_sz, btn_sz);
+    bool rec_active = recorder_.is_recording();
+    bool rec_count  = (record_countdown_ms_ > 0 && !rec_active);
+    // Pulsing red while recording (200 ms cosine breathing).
+    float rec_pulse = 1.0f;
+    if (rec_active) {
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - btn_flash_start_).count(); // any monotonic reference
+        rec_pulse = 0.55f + 0.45f * (float)std::abs(std::sin(ms * 0.005));
+    }
+    uint8_t rec_bg_r = rec_active ? (uint8_t)(110 * rec_pulse + 60) : (rec_hover ? 80 : 55);
+    uint8_t rec_bg_g = rec_hover ? 35 : 35;
+    uint8_t rec_bg_b = rec_hover ? 35 : 35;
+    SDL_SetRenderDrawColor(sdl_renderer_, rec_bg_r, rec_bg_g, rec_bg_b, 180);
+    fill_circle(sdl_renderer_, bx + btn_sz / 2, by + btn_sz / 2, btn_sz / 2);
+    // Glyph: filled red circle when idle, red square when recording, red
+    // circle with thin ring when counting down.
+    int recr = btn_sz / 4;
+    int rcx = bx + btn_sz / 2, rcy = by + btn_sz / 2;
+    uint8_t rdot_a = rec_active ? 255 : (rec_hover ? 240 : 210);
+    if (rec_active) {
+        // Square indicator
+        int sq = recr;
+        SDL_Rect sqr = {rcx - sq, rcy - sq, sq * 2, sq * 2};
+        SDL_SetRenderDrawColor(sdl_renderer_, 235, 80, 80, rdot_a);
+        SDL_RenderFillRect(sdl_renderer_, &sqr);
+    } else {
+        SDL_SetRenderDrawColor(sdl_renderer_, 235, 80, 80, rdot_a);
+        fill_circle(sdl_renderer_, rcx, rcy, recr);
+        if (rec_count) {
+            // Thin white ring around the dot during countdown.
+            int ring = recr + 3;
+            SDL_SetRenderDrawColor(sdl_renderer_, 240, 240, 240, 220);
+            for (int dy = -ring; dy <= ring; dy++) {
+                for (int dx = -ring; dx <= ring; dx++) {
+                    int d2 = dx * dx + dy * dy;
+                    if (d2 <= ring * ring && d2 >= (ring - 1) * (ring - 1))
+                        SDL_RenderDrawPoint(sdl_renderer_, rcx + dx, rcy + dy);
+                }
+            }
+        }
+    }
+
+    // Screenshot button — filled white dot, mirroring the record button's
+    // visual language so the two camera/record affordances read as a pair.
     bx -= btn_sz + gap;
     screenshot_btn_ = {bx, by, btn_sz, btn_sz};
     bool ss_hover = in_rect(mx, my, bx, by, btn_sz, btn_sz);
     uint8_t ss_bg = flashing ? 200 : (ss_hover ? 70 : 50);
     SDL_SetRenderDrawColor(sdl_renderer_, ss_bg, ss_bg, ss_bg + 5, 180);
     fill_circle(sdl_renderer_, bx + btn_sz / 2, by + btn_sz / 2, btn_sz / 2);
-    int cr = btn_sz / 4;
-    int ccx = bx + btn_sz / 2, ccy = by + btn_sz / 2;
-    uint8_t ca = flashing ? 255 : (ss_hover ? 255 : 200);
-    SDL_SetRenderDrawColor(sdl_renderer_, 255, 255, 255, ca);
-    for (int dy = -cr; dy <= cr; dy++) {
-        for (int dx = -cr; dx <= cr; dx++) {
-            int d2 = dx * dx + dy * dy;
-            if (d2 <= cr * cr && d2 >= (cr - 1) * (cr - 1))
-                SDL_RenderDrawPoint(sdl_renderer_, ccx + dx, ccy + dy);
-        }
-    }
-    int dot = std::max(1, cr / 3);
-    fill_circle(sdl_renderer_, ccx, ccy, dot);
+    int ssr = btn_sz / 4;
+    int sscx = bx + btn_sz / 2, sscy = by + btn_sz / 2;
+    uint8_t ss_dot_a = flashing ? 255 : (ss_hover ? 255 : 220);
+    SDL_SetRenderDrawColor(sdl_renderer_, 240, 240, 240, ss_dot_a);
+    fill_circle(sdl_renderer_, sscx, sscy, ssr);
 
     // Settings (gear) button is now drawn next to the icon on the LEFT side
     // (see block above). The right-cluster ends here with the screenshot button.
@@ -2559,6 +2881,7 @@ void Renderer::draw_island() {
     else if (folder_hover) new_hover = 2;
     else if (icon_hover) new_hover = 3;
     else if (gear_hover) new_hover = 6;
+    else if (rec_hover) new_hover = 7;
 
     // Tooltip — use the same draw_bezel_tooltip() as the bezel dots so the
     // styling, font size, edge-clamping and 1 s hover delay are identical
@@ -2573,6 +2896,21 @@ void Renderer::draw_island() {
             case 2: tip = "Open Screenshots Folder";  break;
             case 3: tip = "About 1PhoneMirror (I)"; break;
             case 6: tip = "Settings (S)"; break;
+            case 7: {
+                static std::string rec_tip;
+                if (recorder_.is_recording()) {
+                    int s = (int)recorder_.elapsed_seconds();
+                    char buf[64];
+                    std::snprintf(buf, sizeof(buf), "Stop recording - %d:%02d (Ctrl+R)\nRight-click for delay/timed", s / 60, s % 60);
+                    rec_tip = buf;
+                } else if (record_countdown_ms_ > 0) {
+                    rec_tip = "Cancel countdown";
+                } else {
+                    rec_tip = "Record (Ctrl+R)\nRight-click for delay/timed";
+                }
+                tip = rec_tip.c_str();
+                break;
+            }
         }
         if (tip) {
             // Anchor at the cursor, force tooltip BELOW so it never
@@ -3110,6 +3448,7 @@ void Renderer::draw_settings_panel() {
                 + row_gap + label_h + row_gap            // toggle 1
                 + label_h + row_gap                       // toggle 2
                 + label_h + row_gap                       // toggle 3 (computer name)
+                + label_h + row_gap                       // recording format row
                 + pad;
 
     // Slide animation
@@ -3229,6 +3568,59 @@ void Renderer::draw_settings_panel() {
     settings_toggle_compname_btn_ = draw_toggle(
         "Identify as computer name (restart required)",
         settings_.use_computer_name, cy);
+    cy += label_h + row_gap;
+
+    // Recording format row — two pill buttons (MP4 / GIF) on the left so
+    // all interactive controls line up vertically with the swatch grid and
+    // checkbox column above; descriptive label sits to the right.
+    {
+        int row_x  = panel_x + pad;
+        int box    = std::max(12, label_h + 2);
+        auto draw_pill = [&](const std::string& label, bool sel,
+                             int px, int py, int pw, int ph) -> BtnRect {
+            if (sel) SDL_SetRenderDrawColor(sdl_renderer_, 90, 130, 200, alpha);
+            else     SDL_SetRenderDrawColor(sdl_renderer_, 50, 50, 55, alpha);
+            SDL_Rect br = {px, py, pw, ph};
+            SDL_RenderFillRect(sdl_renderer_, &br);
+            SDL_SetRenderDrawColor(sdl_renderer_, sel ? 200 : 100,
+                                                  sel ? 220 : 100,
+                                                  sel ? 255 : 110, text_alpha);
+            SDL_RenderDrawRect(sdl_renderer_, &br);
+            int tw = 0, th = 0;
+            SDL_Texture* tt = make_text_texture(sdl_renderer_, label, label_h,
+                                                sel ? 255 : 200,
+                                                sel ? 255 : 200,
+                                                sel ? 255 : 200,
+                                                &tw, &th);
+            if (tt) {
+                SDL_SetTextureAlphaMod(tt, text_alpha);
+                SDL_Rect td{px + (pw - tw) / 2, py + (ph - th) / 2, tw, th};
+                SDL_RenderCopy(sdl_renderer_, tt, nullptr, &td);
+                SDL_DestroyTexture(tt);
+            }
+            return BtnRect{px, py, pw, ph};
+        };
+        int pill_w = std::max(48, label_h * 4);
+        int pill_gap = std::max(4, label_h / 3);
+        int pill_h = box;
+        int mp4_x = row_x;
+        int gif_x = mp4_x + pill_w + pill_gap;
+        settings_fmt_mp4_btn_ = draw_pill("MP4", settings_.record_format == 0,
+                                          mp4_x, cy, pill_w, pill_h);
+        settings_fmt_gif_btn_ = draw_pill("GIF", settings_.record_format == 1,
+                                          gif_x, cy, pill_w, pill_h);
+        // Label to the right of the pills.
+        int label_x = gif_x + pill_w + std::max(6, box / 3);
+        int lw = 0, lh = 0;
+        SDL_Texture* lt = make_text_texture(sdl_renderer_, "Recording format",
+                                            label_h, 220, 220, 225, &lw, &lh);
+        if (lt) {
+            SDL_SetTextureAlphaMod(lt, text_alpha);
+            SDL_Rect ld{label_x, cy + (pill_h - lh) / 2, lw, lh};
+            SDL_RenderCopy(sdl_renderer_, lt, nullptr, &ld);
+            SDL_DestroyTexture(lt);
+        }
+    }
 }
 
 void Renderer::clear_log_row_cache() {
@@ -4149,6 +4541,95 @@ void Renderer::open_screenshot_folder() {
     std::filesystem::create_directories(screenshot_dir_);
     ShellExecuteA(nullptr, "explore", screenshot_dir_.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #endif
+}
+
+std::string Renderer::make_recording_path() const {
+    auto now = std::chrono::system_clock::now();
+    auto tt  = std::chrono::system_clock::to_time_t(now);
+    struct tm local_tm;
+#ifdef _WIN32
+    localtime_s(&local_tm, &tt);
+#else
+    localtime_r(&tt, &local_tm);
+#endif
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", &local_tm);
+    const char* ext = (settings_.record_format == 1) ? ".gif" : ".mp4";
+    return screenshot_dir_ + "/recording_" + ts + ext;
+}
+
+void Renderer::start_recording() {
+    if (recorder_.is_recording()) return;
+    if (last_frame_data_.empty() || last_frame_w_ == 0 || last_frame_h_ == 0) {
+        toast_text_ = "No video to record yet";
+        toast_active_ = true;
+        toast_start_ = std::chrono::steady_clock::now();
+        return;
+    }
+    std::filesystem::create_directories(screenshot_dir_);
+
+    media::RecordConfig cfg;
+    cfg.format           = (settings_.record_format == 1) ? media::RecordFormat::GIF
+                                                          : media::RecordFormat::MP4;
+    cfg.output_path      = make_recording_path();
+    cfg.width            = last_frame_w_ & ~1;
+    cfg.height           = last_frame_h_ & ~1;
+    // Downscale GIFs aggressively — RGB8 already loses colour; smaller
+    // dimensions keep the file under a few MB for 10-15 s clips.
+    if (cfg.format == media::RecordFormat::GIF && cfg.width > 480) {
+        int new_w = 480 & ~1;
+        int new_h = (last_frame_h_ * new_w / last_frame_w_) & ~1;
+        cfg.width  = new_w;
+        cfg.height = new_h;
+    }
+    cfg.target_fps       = (cfg.format == media::RecordFormat::GIF)
+                            ? settings_.record_fps_gif
+                            : settings_.record_fps_mp4;
+    cfg.bitrate_kbps     = settings_.record_bitrate_kbps;
+    cfg.max_duration_sec = (pending_record_duration_sec_ > 0)
+                            ? pending_record_duration_sec_
+                            : settings_.record_max_duration_sec;
+    pending_record_duration_sec_ = 0;
+
+    if (!recorder_.start(cfg)) {
+        toast_text_ = std::string("Recording failed: ") + recorder_.last_error();
+        toast_active_ = true;
+        toast_start_ = std::chrono::steady_clock::now();
+        return;
+    }
+    std::cout << "[Recorder] Started: " << cfg.output_path
+              << " (" << cfg.width << "x" << cfg.height
+              << " @ " << cfg.target_fps << " fps)\n";
+    toast_text_ = (cfg.format == media::RecordFormat::GIF)
+        ? "Recording GIF..."
+        : "Recording MP4...";
+    toast_active_ = true;
+    toast_start_  = std::chrono::steady_clock::now();
+}
+
+void Renderer::stop_recording() {
+    if (!recorder_.is_recording() && record_countdown_ms_ == 0) return;
+    if (record_countdown_ms_ > 0 && !recorder_.is_recording()) {
+        // Cancel countdown
+        record_countdown_ms_ = 0;
+        toast_text_ = "Recording cancelled";
+        toast_active_ = true;
+        toast_start_ = std::chrono::steady_clock::now();
+        return;
+    }
+    std::string out = recorder_.stop();
+    std::string err = recorder_.last_error();
+    if (!err.empty()) {
+        toast_text_ = std::string("Recording failed: ") + err;
+    } else if (!out.empty()) {
+        std::filesystem::path p(out);
+        toast_text_ = std::string("Saved ") + p.filename().string();
+        std::cout << "[Recorder] Saved: " << out << "\n";
+    } else {
+        toast_text_ = "Recording stopped";
+    }
+    toast_active_ = true;
+    toast_start_  = std::chrono::steady_clock::now();
 }
 
 void Renderer::copy_to_clipboard(const uint8_t* rgba, int w, int h) {
