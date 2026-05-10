@@ -31,53 +31,30 @@ straight into your screenshots and recordings, ready to paste into a
 guide, a Loop page, or a slide deck.
 ## Screenshots
 
-| | |
-|---|---|
-| ![Waiting for a connection](docs/screenshots/01-waiting.png) | ![Info panel](docs/screenshots/02-info-panel.png) |
-| **Idle screen** — quick reminders for AirPlay (iOS) and Wireless debugging (Android), with the framed phone window ready to receive. | **Info panel** (`I`) — version, shortcuts, network requirements, and a one-click "Copy network test script" for IT validation. |
-| ![Settings panel](docs/screenshots/03-settings-panel.png) | ![Log viewer](docs/screenshots/04-log-viewer.png) |
-| **Settings panel** (`S`) — bezel colour swatches, screenshot/clipboard toggles, computer-name identity, and the MP4 / GIF recording-format selector. | **Log viewer** (`L`) — live activity drawer slides out to the right, perfect for debugging AirPlay handshakes or Android pairing. |
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/01-waiting.png" height="280" alt="Waiting for a connection"></td>
+    <td align="center"><img src="docs/screenshots/02-info-panel.png" height="280" alt="Info panel"></td>
+  </tr>
+  <tr>
+    <td><b>Idle screen</b> — quick reminders for AirPlay (iOS) and Wireless debugging (Android), with the framed phone window ready to receive.</td>
+    <td><b>Info panel</b> (<code>I</code>) — version, shortcuts, network requirements, and a one-click "Copy network test script" for IT validation.</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/03-settings-panel.png" height="280" alt="Settings panel"></td>
+    <td align="center"><img src="docs/screenshots/04-log-viewer.png" height="280" alt="Log viewer"></td>
+  </tr>
+  <tr>
+    <td><b>Settings panel</b> (<code>S</code>) — bezel colour swatches, screenshot/clipboard toggles, computer-name identity, and the MP4 / GIF recording-format selector.</td>
+    <td><b>Log viewer</b> (<code>L</code>) — live activity drawer slides out to the right, perfect for debugging AirPlay handshakes or Android pairing.</td>
+  </tr>
+</table>
 ## Architecture
 
-```
-                ┌────────────────────────────────────────────┐
-                │             1PhoneMirror.exe               │
-                └────────────────────────────────────────────┘
-                          │            │            │
-        ┌─────────────────┘            │            └─────────────────┐
-        ▼                              ▼                              ▼
-┌────────────────┐         ┌────────────────────┐         ┌──────────────────────┐
-│  AirPlay 2     │         │  Android (scrcpy)  │         │  Miracast (WinRT)    │
-│  RTSP + mDNS   │         │  ADB pair/connect  │         │  Wi-Fi Direct        │
-│  FairPlay AES  │         │  scrcpy v3 stream  │         │  Wi-Fi Display       │
-└───────┬────────┘         └─────────┬──────────┘         └──────────┬───────────┘
-        │ H.264 / AAC                │ H.264 (Annex-B)               │ H.264
-        └────────────────────────────┼───────────────────────────────┘
-                                     ▼
-                       ┌──────────────────────────┐
-                       │  FFmpeg decode (sw/hw)   │  YUV → RGBA
-                       └─────────────┬────────────┘
-                                     ▼
-                       ┌──────────────────────────┐
-                       │   SDL2 renderer          │  phone frame, island
-                       │   + Win32 GDI text       │  menu, log viewer,
-                       │   + audio output         │  screenshots / MP4 /
-                       │   + recorder (libx264)   │  GIF, source dots
-                       └──────────────────────────┘
-```
-
-Source layout:
-
-| Path | Contents |
-|------|----------|
-| `src/airplay/` | mDNS service, RTSP server, AirPlay mirror session, FairPlay |
-| `src/android/` | `AdbController` (Win32 process pipes), scrcpy v3 stream receiver, in-app pair/connect dialog |
-| `src/miracast/` | WinRT Miracast receiver |
-| `src/media/` | FFmpeg decoder, SDL2 renderer, audio output, phone-frame overlay, screen recorder (MP4/GIF) |
-| `src/network/` | TCP / RTSP plumbing |
-| `src/app.cpp` | Wires sources to renderer, owns lifecycle |
-| `tools/adb/` | Bundled platform-tools `adb.exe` (staged at build time) |
-| `tools/scrcpy-server.jar` | scrcpy v3.0 server, pushed to the phone over ADB |
+The receiver runs entirely on the PC. AirPlay (iOS) and scrcpy (Android)
+streams are decoded with FFmpeg and rendered through SDL2 inside the
+phone-shaped window. Recording captures the same RGBA frames straight
+into MP4 (libx264) or animated GIF.
 
 ## Install
 
@@ -89,26 +66,6 @@ winget install MSEndpointMgr.1PhoneMirror
 
 Or grab the latest MSI directly from
 [Releases](https://github.com/MSEndpointMgr/1PhoneMirror/releases/latest).
-
-## Build from source
-
-### Prerequisites
-
-- Windows 10 1903+ (Miracast) / Windows 11 recommended
-- Visual Studio 2022 with the C++ Desktop workload (or the Build Tools)
-- CMake 3.20+
-- vcpkg (the build script uses `$env:VCPKG_ROOT` or `%USERPROFILE%\vcpkg`)
-
-### Steps
-
-```powershell
-.\scripts\setup_deps.ps1   # one-time vcpkg install of FFmpeg (with libx264), SDL2, OpenSSL
-.\scripts\build.ps1
-.\build\Release\1PhoneMirror.exe
-```
-
-The build script also stages `tools\adb\adb.exe` and `tools\scrcpy-server.jar`
-into `build\Release\tools\` so the Android receiver works out of the box.
 
 ## Connecting a phone
 
@@ -162,31 +119,6 @@ button on the menu (or use the Windows file dialog) to open it.
 | `Ctrl+C` | (Log viewer) Copy entire log to clipboard |
 | `Ctrl+X` | (Log viewer) Clear log |
 | `Esc` | Close panel / quit |
-
-## Command-line options
-
-```
---name <name>                     Display name shown to phones (default: 1PhoneMirror)
---width <px>                      Window width (default: 1280)
---height <px>                     Window height (default: 720)
---no-airplay                      Disable the AirPlay receiver
---no-miracast                     Disable the Miracast receiver
---no-android                      Disable the Android (scrcpy) receiver
---android-pair <ip:port> <code>   One-shot: pair with Wireless debugging then exit
---android-connect <ip:port>       One-shot: connect to a paired device then exit
---android-device <serial>         Auto-start streaming this device on launch
---android-jar <path>              Override path to scrcpy-server.jar
---android-adb <path>              Override path to adb.exe
-```
-
-## Packaging (MSI installer)
-
-```powershell
-.\package.ps1   # uses WiX Toolset 5 — produces dist\1PhoneMirror-<ver>.msi
-```
-
-The version string is sourced from `CMakeLists.txt` and propagated to the
-binary, the in-app footer, and the MSI metadata.
 
 ## Version history
 
@@ -257,4 +189,45 @@ license:
 | Microsoft VC++ Runtime | 14.x | Microsoft Redistributable License | C/C++ runtime DLLs |
 
 All components are GPL-3.0 compatible.
+
+## Project metadata
+
+A quick reference for sponsors, packagers, and code-signing programs
+(SignPath OSS, sigstore, etc.).
+
+| Field | Value |
+|-------|-------|
+| **Project name** | 1PhoneMirror |
+| **Project URL** | https://github.com/MSEndpointMgr/1PhoneMirror |
+| **Releases** | https://github.com/MSEndpointMgr/1PhoneMirror/releases |
+| **Issue tracker** | https://github.com/MSEndpointMgr/1PhoneMirror/issues |
+| **License** | [GPL-3.0-or-later](LICENSE) (OSI-approved) |
+| **Programming language** | C++20 |
+| **Target platform** | Windows 10 1903+, Windows 11 (x64) |
+| **Maintainer** | Simon Skotheimsvik — Microsoft MVP, MSEndpointMgr |
+| **Maintainer profile** | https://linktr.ee/simonskotheimsvik |
+| **Organisation** | [MSEndpointMgr](https://github.com/MSEndpointMgr) |
+| **Distribution** | MSI installer (WiX 5), published via GitHub Releases and the [winget package `MSEndpointMgr.1PhoneMirror`](https://github.com/microsoft/winget-pkgs/tree/master/manifests/m/MSEndpointMgr/1PhoneMirror) |
+| **Artifact name pattern** | `1PhoneMirror-<version>.msi` |
+| **Build pipeline** | GitHub Actions workflow `release.yml` — triggers on tag push `v*`, runs on `windows-latest`, produces the signed-ready MSI as a release asset |
+| **Reproducible builds** | Yes — vcpkg manifest pins all dependencies (FFmpeg `gpl,x264`, SDL2, OpenSSL); the workflow uses the exact toolchain |
+| **Funding** | https://buymeacoffee.com/simonskothn |
+
+### Code signing — SignPath OSS
+
+This project is being submitted to the [SignPath.io OSS programme](https://signpath.org/apply)
+to provide trusted Authenticode signatures for every released MSI.
+
+The application form needs:
+
+- ✅ **OSI-approved license** — GPL-3.0-or-later
+- ✅ **Public source repository** — `MSEndpointMgr/1PhoneMirror`
+- ✅ **Public release pipeline** — GitHub Actions workflow attached to the release tag
+- ✅ **Maintainer GitHub account** — `@SimonSkotheimsvik`
+- ✅ **Reproducible artifact** — MSI built from the workflow, available on the Releases page
+
+When SignPath approval lands the workflow will be extended with a
+`signpath/github-action-submit-signing-request` step so each tagged
+release ships a counter-signed MSI directly to the Releases page and to
+winget.
 
