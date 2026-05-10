@@ -3713,28 +3713,63 @@ void Renderer::draw_log_panel() {
     SDL_RenderFillRect(sdl_renderer_, &e_rgt);
 
     // 3. Two right-side corners drawn as a single per-pixel pass per corner.
-    //    For each pixel in the corner bounding box we test float distance
-    //    from the corner center and pick:
-    //       distance <  in_pr      -> drawer colour
-    //       in_pr <= d <= out_pr   -> border colour
-    //       distance >  out_pr     -> skip (transparent)
-    //    This guarantees the border band has uniform thickness `bw` along
-    //    the entire arc, with no integer-rounding stair-step ghosts.
+    //    Uses coverage-based anti-aliasing via a signed distance from the
+    //    corner centre. The interior is painted opaquely; only the ~1px
+    //    outer rim and the body/border seam use partial alpha so the curve
+    //    looks smooth without any stair-step ghosts.
+    //       d + 0.5 < r_in            -> drawer (opaque)
+    //       d in (r_in-0.5, r_in+0.5) -> blend drawer/border
+    //       d in [r_in+0.5, r_out-0.5)-> border (opaque)
+    //       d in [r_out-0.5, r_out+0.5]-> blend border with destination
+    //       d > r_out + 0.5           -> skip (transparent)
     auto paint_corner = [&](int cx, int cy, int quad) {
-        float r_out = (float)pr + 0.5f;
-        float r_in  = (float)(pr - bw) + 0.5f;
-        for (int dy = -pr; dy <= pr; dy++) {
-            for (int dx = -pr; dx <= pr; dx++) {
+        float r_out = (float)pr;
+        float r_in  = (float)(pr - bw);
+        for (int dy = -pr - 1; dy <= pr + 1; dy++) {
+            for (int dx = -pr - 1; dx <= pr + 1; dx++) {
                 if (quad == 0 && !(dx >= 0 && dy <= 0)) continue;
                 if (quad == 1 && !(dx >= 0 && dy >= 0)) continue;
                 float d = std::sqrt((float)(dx * dx + dy * dy));
-                if (d > r_out) continue;
-                if (d >= r_in) {
-                    SDL_SetRenderDrawColor(sdl_renderer_, er, eg, eb, 255);
-                } else {
+                // Outer coverage: 1 well inside r_out, 0 well outside.
+                float cov_out = std::clamp(r_out + 0.5f - d, 0.0f, 1.0f);
+                if (cov_out <= 0.0f) continue;
+                // Inner coverage: 1 well inside r_in, 0 well outside.
+                float cov_in  = std::clamp(r_in  + 0.5f - d, 0.0f, 1.0f);
+                float ring = cov_out - cov_in; // 1 only in the strict band
+                int px = cx + dx;
+                int py = cy + dy;
+                if (cov_in >= 1.0f) {
+                    // Fully inside -> opaque drawer.
+                    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_NONE);
                     SDL_SetRenderDrawColor(sdl_renderer_, dr, dg, db, 255);
+                    SDL_RenderDrawPoint(sdl_renderer_, px, py);
+                } else if (cov_out >= 1.0f && ring <= 0.0f) {
+                    // Fully drawer, fully inside outer (cov_in must be <1
+                    // here so we're in the body/border seam transition).
+                    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_NONE);
+                    SDL_SetRenderDrawColor(sdl_renderer_, dr, dg, db, 255);
+                    SDL_RenderDrawPoint(sdl_renderer_, px, py);
+                } else {
+                    // Blend drawer + border according to (cov_in) and the
+                    // remaining outer coverage. Premix the RGB once, then
+                    // emit with cov_out as the alpha so the rim feathers
+                    // smoothly against whatever is behind the window.
+                    float bd = cov_in;          // drawer share inside ring
+                    float bb = ring;            // border share
+                    float total = bd + bb;
+                    uint8_t mr, mg, mb;
+                    if (total <= 0.0001f) {
+                        mr = er; mg = eg; mb = eb;
+                    } else {
+                        mr = (uint8_t)((dr * bd + er * bb) / total);
+                        mg = (uint8_t)((dg * bd + eg * bb) / total);
+                        mb = (uint8_t)((db * bd + eb * bb) / total);
+                    }
+                    uint8_t a = (uint8_t)(cov_out * 255.0f);
+                    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
+                    SDL_SetRenderDrawColor(sdl_renderer_, mr, mg, mb, a);
+                    SDL_RenderDrawPoint(sdl_renderer_, px, py);
                 }
-                SDL_RenderDrawPoint(sdl_renderer_, cx + dx, cy + dy);
             }
         }
     };

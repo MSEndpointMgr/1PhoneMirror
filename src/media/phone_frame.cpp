@@ -277,45 +277,97 @@ uint8_t* PhoneFrame::composite_screenshot(SDL_Renderer* /*renderer*/,
 
 // --- Drawing primitives ---
 
+namespace {
+
+// Signed distance to a rounded rectangle. <0 inside, >0 outside, ~0 on the
+// edge. Used for both the outer frame fill and the screen cutout so the
+// two curves share the same geometry — guarantees the screen border traces
+// the bezel exactly.
+inline float rrect_sdf(float px, float py,
+                      float rx, float ry, float rw, float rh, float r) {
+    float hx = rw * 0.5f;
+    float hy = rh * 0.5f;
+    float cx = rx + hx;
+    float cy = ry + hy;
+    float qx = std::abs(px - cx) - (hx - r);
+    float qy = std::abs(py - cy) - (hy - r);
+    float ox = std::max(qx, 0.0f);
+    float oy = std::max(qy, 0.0f);
+    float outside = std::sqrt(ox * ox + oy * oy);
+    float inside  = std::min(std::max(qx, qy), 0.0f);
+    return outside + inside - r;
+}
+
+inline void blend_pixel(uint32_t* dst_ptr, uint32_t src, float coverage) {
+    if (coverage <= 0.0f) return;
+    if (coverage > 1.0f) coverage = 1.0f;
+
+    uint8_t sa = (src >> 24) & 0xFF;
+    if (sa == 0) {
+        // Erase mode: multiply existing alpha by (1 - coverage). Keeps RGB
+        // intact so the cut-out edge fades smoothly into the surrounding
+        // bezel colour.
+        uint32_t d = *dst_ptr;
+        uint8_t da = (d >> 24) & 0xFF;
+        uint8_t new_a = static_cast<uint8_t>(da * (1.0f - coverage));
+        *dst_ptr = (d & 0x00FFFFFFu) | (static_cast<uint32_t>(new_a) << 24);
+        return;
+    }
+
+    float a = coverage * (sa / 255.0f);
+    float ia = 1.0f - a;
+
+    uint32_t d = *dst_ptr;
+    uint8_t dr = d & 0xFF;
+    uint8_t dg = (d >> 8) & 0xFF;
+    uint8_t db = (d >> 16) & 0xFF;
+    uint8_t da = (d >> 24) & 0xFF;
+
+    uint8_t sr = src & 0xFF;
+    uint8_t sg = (src >> 8) & 0xFF;
+    uint8_t sb = (src >> 16) & 0xFF;
+
+    uint8_t orr = static_cast<uint8_t>(sr * a + dr * ia);
+    uint8_t og  = static_cast<uint8_t>(sg * a + dg * ia);
+    uint8_t ob  = static_cast<uint8_t>(sb * a + db * ia);
+    float new_a_f = a * 255.0f + da * ia;
+    if (new_a_f > 255.0f) new_a_f = 255.0f;
+    uint8_t oa = static_cast<uint8_t>(new_a_f);
+
+    *dst_ptr = orr | (static_cast<uint32_t>(og) << 8)
+                   | (static_cast<uint32_t>(ob) << 16)
+                   | (static_cast<uint32_t>(oa) << 24);
+}
+
+} // namespace
+
 void PhoneFrame::draw_rounded_rect(uint32_t* pixels, int img_w, int img_h,
                                     int x, int y, int w, int h, int radius, uint32_t color) {
-    int r2 = radius * radius;
-    for (int py = y; py < y + h; py++) {
-        if (py < 0 || py >= img_h) continue;
-        for (int px = x; px < x + w; px++) {
-            if (px < 0 || px >= img_w) continue;
+    // SDF-based draw with 0.5-px anti-aliased edges. Works in both fill
+    // mode (opaque colour) and erase mode (alpha=0 → screen cutout).
+    float fx = static_cast<float>(x);
+    float fy = static_cast<float>(y);
+    float fw = static_cast<float>(w);
+    float fh = static_cast<float>(h);
+    float fr = static_cast<float>(radius);
 
-            // Check if pixel is inside the rounded rectangle
-            int lx = px - x;       // Local x within rect
-            int ly = py - y;       // Local y within rect
-            bool inside = true;
+    // Tight scan: only iterate the rect bbox (no point scanning the whole
+    // frame). Clip to image bounds.
+    int y0 = std::max(0, y);
+    int y1 = std::min(img_h, y + h);
+    int x0 = std::max(0, x);
+    int x1 = std::min(img_w, x + w);
 
-            // Check corners
-            if (lx < radius && ly < radius) {
-                // Top-left corner
-                int dx = radius - lx;
-                int dy = radius - ly;
-                if (dx * dx + dy * dy > r2) inside = false;
-            } else if (lx >= w - radius && ly < radius) {
-                // Top-right corner
-                int dx = lx - (w - radius - 1);
-                int dy = radius - ly;
-                if (dx * dx + dy * dy > r2) inside = false;
-            } else if (lx < radius && ly >= h - radius) {
-                // Bottom-left corner
-                int dx = radius - lx;
-                int dy = ly - (h - radius - 1);
-                if (dx * dx + dy * dy > r2) inside = false;
-            } else if (lx >= w - radius && ly >= h - radius) {
-                // Bottom-right corner
-                int dx = lx - (w - radius - 1);
-                int dy = ly - (h - radius - 1);
-                if (dx * dx + dy * dy > r2) inside = false;
-            }
-
-            if (inside) {
-                pixels[py * img_w + px] = color;
-            }
+    for (int py = y0; py < y1; ++py) {
+        float spy = py + 0.5f;
+        uint32_t* row = pixels + py * img_w;
+        for (int px = x0; px < x1; ++px) {
+            float spx = px + 0.5f;
+            float sd = rrect_sdf(spx, spy, fx, fy, fw, fh, fr);
+            // coverage = 1 deep inside, 0 outside, ~linear in [-0.5, +0.5]
+            float cov = 0.5f - sd;
+            if (cov <= 0.0f) continue;
+            blend_pixel(row + px, color, cov);
         }
     }
 }
@@ -323,44 +375,39 @@ void PhoneFrame::draw_rounded_rect(uint32_t* pixels, int img_w, int img_h,
 void PhoneFrame::draw_rounded_rect_outline(uint32_t* pixels, int img_w, int img_h,
                                             int x, int y, int w, int h, int radius,
                                             int thickness, uint32_t color) {
-    int outer_r2 = radius * radius;
-    int inner_r = std::max(0, radius - thickness);
-    int inner_r2 = inner_r * inner_r;
+    // Outline = ring between the outer rounded rect and an inner rect
+    // shrunk by `thickness` on every side. Computing both SDFs gives us
+    // a clean anti-aliased stroke that follows the corner curvature.
+    float fx = static_cast<float>(x);
+    float fy = static_cast<float>(y);
+    float fw = static_cast<float>(w);
+    float fh = static_cast<float>(h);
+    float fr_out = static_cast<float>(radius);
 
-    for (int py = y; py < y + h; py++) {
-        if (py < 0 || py >= img_h) continue;
-        for (int px = x; px < x + w; px++) {
-            if (px < 0 || px >= img_w) continue;
+    float t  = static_cast<float>(thickness);
+    float ix = fx + t;
+    float iy = fy + t;
+    float iw = std::max(0.0f, fw - 2.0f * t);
+    float ih = std::max(0.0f, fh - 2.0f * t);
+    float fr_in = std::max(0.0f, fr_out - t);
 
-            int lx = px - x;
-            int ly = py - y;
+    int y0 = std::max(0, y);
+    int y1 = std::min(img_h, y + h);
+    int x0 = std::max(0, x);
+    int x1 = std::min(img_w, x + w);
 
-            // Must be on the edge (within thickness of the border)
-            bool on_outer_edge = (lx < thickness || lx >= w - thickness ||
-                                  ly < thickness || ly >= h - thickness);
-            if (!on_outer_edge) continue;
-
-            // Must be inside the outer rounded rect
-            bool inside_outer = true;
-            auto check_corner = [&](int cx, int cy, int r2_check) -> bool {
-                int dx = lx - cx;
-                int dy = ly - cy;
-                return dx * dx + dy * dy <= r2_check;
-            };
-
-            if (lx < radius && ly < radius) {
-                inside_outer = check_corner(radius, radius, outer_r2);
-            } else if (lx >= w - radius && ly < radius) {
-                inside_outer = check_corner(w - radius - 1, radius, outer_r2);
-            } else if (lx < radius && ly >= h - radius) {
-                inside_outer = check_corner(radius, h - radius - 1, outer_r2);
-            } else if (lx >= w - radius && ly >= h - radius) {
-                inside_outer = check_corner(w - radius - 1, h - radius - 1, outer_r2);
-            }
-
-            if (inside_outer) {
-                pixels[py * img_w + px] = color;
-            }
+    for (int py = y0; py < y1; ++py) {
+        float spy = py + 0.5f;
+        uint32_t* row = pixels + py * img_w;
+        for (int px = x0; px < x1; ++px) {
+            float spx = px + 0.5f;
+            float sd_out = rrect_sdf(spx, spy, fx, fy, fw, fh, fr_out);
+            float sd_in  = rrect_sdf(spx, spy, ix, iy, iw, ih, fr_in);
+            float cov_out = std::clamp(0.5f - sd_out, 0.0f, 1.0f);
+            float cov_in  = std::clamp(0.5f - sd_in,  0.0f, 1.0f);
+            float ring = cov_out - cov_in;
+            if (ring <= 0.0f) continue;
+            blend_pixel(row + px, color, ring);
         }
     }
 }

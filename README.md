@@ -125,6 +125,7 @@ button on the menu (or use the Windows file dialog) to open it.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **0.3.2** | 10.05.2026 | User interface fixes. |
 | **0.3.1** | 10.05.2026 | **Phone frame on recordings** — MP4 and GIF now include the phone bezel/rounded corners just like screenshots. GIF gets per-frame optimal palette via `palettegen`+`paletteuse` with **genuine transparent rounded corners**. |
 | **0.3.0** | 10.05.2026 | **Screen recording** — MP4 (H.264) and GIF, `Ctrl+R`, right-click for 5 s delay or 5 / 10 / 15 s timed clips. Frosty countdown overlay, REC chip while recording. Format selector in Settings. New bezel record button alongside the screenshot button. |
 | **0.2.5** | 09.05.2026 | Info panel: copy network-test PowerShell script (with MDM check). |
