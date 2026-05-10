@@ -49,6 +49,7 @@ guide, a Loop page, or a slide deck.
     <td><b>Log viewer</b> (<code>L</code>) — live activity drawer slides out to the right, perfect for debugging AirPlay handshakes or Android pairing.</td>
   </tr>
 </table>
+
 ## Architecture
 
 The receiver runs entirely on the PC. AirPlay (iOS) and scrcpy (Android)
@@ -212,22 +213,4 @@ A quick reference for sponsors, packagers, and code-signing programs
 | **Build pipeline** | GitHub Actions workflow `release.yml` — triggers on tag push `v*`, runs on `windows-latest`, produces the signed-ready MSI as a release asset |
 | **Reproducible builds** | Yes — vcpkg manifest pins all dependencies (FFmpeg `gpl,x264`, SDL2, OpenSSL); the workflow uses the exact toolchain |
 | **Funding** | https://buymeacoffee.com/simonskothn |
-
-### Code signing — SignPath OSS
-
-This project is being submitted to the [SignPath.io OSS programme](https://signpath.org/apply)
-to provide trusted Authenticode signatures for every released MSI.
-
-The application form needs:
-
-- ✅ **OSI-approved license** — GPL-3.0-or-later
-- ✅ **Public source repository** — `MSEndpointMgr/1PhoneMirror`
-- ✅ **Public release pipeline** — GitHub Actions workflow attached to the release tag
-- ✅ **Maintainer GitHub account** — `@SimonSkotheimsvik`
-- ✅ **Reproducible artifact** — MSI built from the workflow, available on the Releases page
-
-When SignPath approval lands the workflow will be extended with a
-`signpath/github-action-submit-signing-request` step so each tagged
-release ships a counter-signed MSI directly to the Releases page and to
-winget.
 
