@@ -1,5 +1,7 @@
 #include <openmirror/media/renderer.h>
 #include <openmirror/log_buffer.h>
+#include <openmirror/config.h>
+#include <openmirror/network/update_check.h>
 #include <algorithm>
 #include <chrono>
 #include <climits>
@@ -491,7 +493,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         footer_line1_.push_back(seg(L"1PhoneMirror by ", 120, 120, 120));
         footer_line1_.push_back(seg(L"MSEndpointMgr", 120, 120, 120,
                                      "https://msendpointmgr.com/", "Open MSEndpointMgr"));
-        // Line 2: "(c) 2026 \u266B Simon Skotheimsvik, MVP \u00B7 v0.3.4"
+        // Line 2: "(c) 2026 \u266B Simon Skotheimsvik, MVP \u00B7 v0.3.5"
         footer_line2_.push_back(seg(L"\u00A9 2026 ", 100, 100, 100));
         // Beamed-eighth-notes glyph — render via Segoe UI Symbol so it works
         // on Windows builds where the regular Segoe UI font lacks U+266B.
@@ -509,8 +511,40 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
                                      "https://buymeacoffee.com/simonskothn",
                                      "Buy me a coffee",
                                      L"Segoe UI Symbol"));
-        footer_line2_.push_back(seg(L" \u00B7 v0.3.4", 100, 100, 100,
+        // Line 3: " · v0.3.5" — broken onto its own line so the second
+        // line stays a comfortable width on narrow phone aspects.
+        footer_line3_.push_back(seg(L"v0.3.5", 100, 100, 100,
                                      "", "Version history (V)"));
+
+        // Mirror the same content for the Info panel, but baked at the
+        // smaller font size used by the network-requirement section so
+        // the visual weight matches the surrounding text.
+        auto iseg = [&](const std::wstring& text, uint8_t r, uint8_t g, uint8_t b,
+                         const std::string& url = "", const std::string& tip = "",
+                         const wchar_t* font = L"Segoe UI") -> FooterSeg {
+            FooterSeg fs;
+            fs.url = url;
+            fs.tooltip = tip;
+            fs.tex = make_text_texture_w(sdl_renderer_, text, 30, r, g, b, &fs.w, &fs.h, font);
+            return fs;
+        };
+        info_footer_line1_.push_back(iseg(L"1PhoneMirror by ", 130, 130, 130));
+        info_footer_line1_.push_back(iseg(L"MSEndpointMgr", 130, 130, 130,
+                                           "https://msendpointmgr.com/", "Open MSEndpointMgr"));
+        info_footer_line2_.push_back(iseg(L"\u00A9 2026 ", 130, 130, 130));
+        info_footer_line2_.push_back(iseg(L"\u266B", 130, 130, 130,
+                                           "", "Tuned carefully for the community",
+                                           L"Segoe UI Symbol"));
+        info_footer_line2_.push_back(iseg(L" ", 130, 130, 130));
+        info_footer_line2_.push_back(iseg(L"Simon Skotheimsvik, MVP", 130, 130, 130,
+                                           "https://linktr.ee/simonskotheimsvik", "More info of Simon"));
+        info_footer_line2_.push_back(iseg(L" ", 130, 130, 130));
+        info_footer_line2_.push_back(iseg(L"\u2615", 230, 200, 60,
+                                           "https://buymeacoffee.com/simonskothn",
+                                           "Buy me a coffee",
+                                           L"Segoe UI Symbol"));
+        info_footer_line3_.push_back(iseg(L"v0.3.5", 130, 130, 130,
+                                           "", "Version history (V)"));
     }
 #endif
 
@@ -523,7 +557,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
             line.tex = make_text_texture_w(sdl_renderer_, text, font_sz, r, g, b, &line.w, &line.h);
             return line;
         };
-        info_lines_.push_back(make_info(L"1PhoneMirror v0.3.4", 44, 255, 255, 255));
+        info_lines_.push_back(make_info(L"1PhoneMirror v0.3.5", 44, 255, 255, 255));
         info_lines_.push_back(make_info(L"AirPlay (iOS) \u00B7 scrcpy (Android)", 34, 160, 160, 160));
         info_lines_.push_back({nullptr, 0, 0}); // spacer
         info_lines_.push_back(make_info(L"(F) Fullscreen \u00B7 (M) Menu \u00B7 (L) Log \u00B7 (A) Add Android", 30, 130, 130, 130));
@@ -535,6 +569,11 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         info_lines_.push_back(make_info(L"AirPlay: TCP 7000/7001/7100, UDP 6000-6010", 30, 130, 130, 130));
         info_lines_.push_back(make_info(L"Android: TCP 27183 (loopback) + ADB pair port from phone", 30, 130, 130, 130));
         info_lines_.push_back(make_info(L"Installer adds Windows Firewall rules for the .exe", 30, 130, 130, 130));
+
+        // "About" header that sits just above the MSEndpointMgr/Simon/version
+        // footer block at the bottom of the Info panel. Sized to match the
+        // "Network requirements" section header.
+        info_about_header_ = make_info(L"About", 34, 160, 160, 160);
     }
 #endif
 
@@ -549,6 +588,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
+        version_lines_.push_back(make_ver(L"13.05.2026 \u2013 0.3.5", 34, 200, 200, 255));
+        version_lines_.push_back(make_ver(L"Version check and UI tunings", 30, 160, 160, 160));
+        version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"13.05.2026 \u2013 0.3.4", 34, 200, 200, 255));
         version_lines_.push_back(make_ver(L"New Android discovery routine for easy connect", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
@@ -633,8 +675,20 @@ void Renderer::shutdown() {
     }
     for (auto& s : footer_line1_) { if (s.tex) SDL_DestroyTexture(s.tex); }
     for (auto& s : footer_line2_) { if (s.tex) SDL_DestroyTexture(s.tex); }
+    for (auto& s : footer_line3_) { if (s.tex) SDL_DestroyTexture(s.tex); }
     footer_line1_.clear();
     footer_line2_.clear();
+    footer_line3_.clear();
+    for (auto& s : info_footer_line1_) { if (s.tex) SDL_DestroyTexture(s.tex); }
+    for (auto& s : info_footer_line2_) { if (s.tex) SDL_DestroyTexture(s.tex); }
+    for (auto& s : info_footer_line3_) { if (s.tex) SDL_DestroyTexture(s.tex); }
+    info_footer_line1_.clear();
+    info_footer_line2_.clear();
+    info_footer_line3_.clear();
+    if (info_about_header_.tex) {
+        SDL_DestroyTexture(info_about_header_.tex);
+        info_about_header_.tex = nullptr;
+    }
     if (footer_tooltip_tex_) { SDL_DestroyTexture(footer_tooltip_tex_); footer_tooltip_tex_ = nullptr; }
     if (toast_tex_) { SDL_DestroyTexture(toast_tex_); toast_tex_ = nullptr; }
     if (tooltip_tex_) { SDL_DestroyTexture(tooltip_tex_); tooltip_tex_ = nullptr; }
@@ -654,6 +708,7 @@ void Renderer::shutdown() {
     for (auto& l : version_lines_) { if (l.tex) SDL_DestroyTexture(l.tex); }
     version_lines_.clear();
     if (pending_overlay_tex_) { SDL_DestroyTexture(pending_overlay_tex_); pending_overlay_tex_ = nullptr; }
+    if (protected_overlay_tex_) { SDL_DestroyTexture(protected_overlay_tex_); protected_overlay_tex_ = nullptr; }
     if (texture_) { SDL_DestroyTexture(texture_); texture_ = nullptr; }
     if (sdl_renderer_) { SDL_DestroyRenderer(sdl_renderer_); sdl_renderer_ = nullptr; }
     if (window_) { SDL_DestroyWindow(window_); window_ = nullptr; }
@@ -1299,8 +1354,10 @@ void Renderer::run() {
                         }
                         break;
                     }
-                    // Footer link clicks (waiting screen only)
-                    if (!ever_received_frame_) {
+                    // Footer link clicks (waiting screen + info panel).
+                    // The info panel re-publishes the same footer hits at
+                    // its bottom, so the same dispatcher handles both.
+                    if (!ever_received_frame_ || info_panel_visible_) {
                         bool handled = false;
                         for (auto& hit : footer_hits_) {
                             if (in_rect(mx, my, hit.x, hit.y, hit.w, hit.h)) {
@@ -1319,6 +1376,11 @@ void Renderer::run() {
                                         settings_panel_animating_ = true;
                                         settings_panel_anim_start_ = std::chrono::steady_clock::now();
                                     }
+                                    handled = true;
+                                    break;
+                                }
+                                if (hit.tooltip == "info_check_updates") {
+                                    check_for_update_async(true);
                                     handled = true;
                                     break;
                                 }
@@ -1528,6 +1590,14 @@ void Renderer::run() {
                             std::cout << "[Renderer] Copied network troubleshooting script\n";
                             break;
                         }
+                        // "Check for updates" button — manual GitHub poll.
+                        if (info_check_btn_.w > 0 &&
+                            !update_check_in_progress_.load() &&
+                            in_rect(mx, my, info_check_btn_.x, info_check_btn_.y,
+                                    info_check_btn_.w, info_check_btn_.h)) {
+                            check_for_update_async(true);
+                            break;
+                        }
                         if (!in_rect(mx, my, info_panel_rect_.x, info_panel_rect_.y,
                                      info_panel_rect_.w, info_panel_rect_.h)) {
                             info_panel_visible_ = false;
@@ -1715,16 +1785,23 @@ void Renderer::render_frame() {
                 window_shape_set_ = false;
                 if (phone_frame_enabled_) {
                     phone_frame_.generate(sdl_renderer_, tex_width_, tex_height_);
-                    // Preserve the user's window placement. Only adjust the
-                    // window width to match the new device's aspect ratio,
-                    // keeping the same on-screen height and top-left
-                    // position. (SDL_SetWindowSize is anchored to top-left.)
+                    // Preserve the user's window placement AND the perceived
+                    // size across portrait <-> landscape rotation: keep the
+                    // SHORT side of the window the same length, then derive
+                    // the long side from the new phone aspect ratio. Without
+                    // this, rotating a 400x800 portrait would jump to
+                    // 1600x800 landscape (short side doubling).
                     int fw = phone_frame_.frame_width();
                     int fh = phone_frame_.frame_height();
                     int cur_w, cur_h;
                     SDL_GetWindowSize(window_, &cur_w, &cur_h);
-                    float new_w = (float)cur_h * fw / fh;
-                    SDL_SetWindowSize(window_, (int)new_w, cur_h);
+                    int prev_short = std::min(cur_w, cur_h);
+                    int new_short  = std::min(fw, fh);
+                    if (new_short <= 0) new_short = 1;
+                    float s = (float)prev_short / (float)new_short;
+                    int new_w = std::max(1, (int)std::round(fw * s));
+                    int new_h = std::max(1, (int)std::round(fh * s));
+                    SDL_SetWindowSize(window_, new_w, new_h);
                 }
 
                 // A new stream started (first frame, or a different device
@@ -1890,6 +1967,81 @@ void Renderer::render_frame() {
 
                 SDL_Rect tr = {svx + (svw - tw) / 2, belt_y + pad, tw, th};
                 SDL_RenderCopy(sdl_renderer_, pending_overlay_tex_, nullptr, &tr);
+            }
+        }
+
+        // Protected/blank-content detector. Sustained near-black frames
+        // most commonly mean Android FLAG_SECURE (lock screen, banking
+        // app, MDM-restricted document, DRM video). The framework gives
+        // us no signal, so we wait ~1.2 s of unbroken black before
+        // surfacing the overlay to avoid flickering on legitimate dark
+        // transitions (app switcher fade-to-black, video letterbox, etc).
+        if (is_frame_near_black()) {
+            auto now = std::chrono::steady_clock::now();
+            if (!black_frame_active_) {
+                black_frame_active_ = true;
+                black_frame_since_ = now;
+            }
+            auto held_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - black_frame_since_).count();
+            protected_overlay_visible_ = held_ms >= 1200;
+        } else {
+            black_frame_active_ = false;
+            protected_overlay_visible_ = false;
+        }
+
+        if (protected_overlay_visible_ && pending_source_name_.empty()) {
+            // Two lines, baked at a font size chosen to fit the current
+            // screen width. Re-baked only when that target size changes,
+            // so glyphs are always rendered 1:1 (no scaling = crisp) but
+            // still fit even on small windows / narrow phone aspects.
+            const char* line1 = "Screen content is hidden by the device.";
+            const char* line2 = "Lock screen or protected content.";
+            // Pick a font size that, given the longer line, leaves comfortable
+            // side margins. Clamp to a sane absolute range.
+            int target_px = std::clamp(svw / 22, 11, 48);
+            static SDL_Texture* tex1 = nullptr;
+            static SDL_Texture* tex2 = nullptr;
+            static int w1 = 0, h1 = 0, w2 = 0, h2 = 0;
+            static int baked_px = 0;
+            if (target_px != baked_px) {
+                if (tex1) { SDL_DestroyTexture(tex1); tex1 = nullptr; }
+                if (tex2) { SDL_DestroyTexture(tex2); tex2 = nullptr; }
+                tex1 = make_text_texture(sdl_renderer_, line1, target_px,
+                                         235, 235, 235, &w1, &h1);
+                tex2 = make_text_texture(sdl_renderer_, line2, target_px,
+                                         235, 235, 235, &w2, &h2);
+                baked_px = target_px;
+            }
+            if (tex1 && tex2) {
+                int gap = std::max(2, h1 / 6);
+                int text_h = h1 + gap + h2;
+                int pad = std::max(8, h1 / 2);
+                int belt_h = text_h + pad * 2;
+                int belt_y = svy + (svh - belt_h) / 2;
+                SDL_Rect belt = {svx, belt_y, svw, belt_h};
+
+                SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(sdl_renderer_, 18, 22, 28, 200);
+                SDL_RenderFillRect(sdl_renderer_, &belt);
+                SDL_SetRenderDrawColor(sdl_renderer_, 255, 255, 255, 16);
+                SDL_RenderFillRect(sdl_renderer_, &belt);
+                SDL_SetRenderDrawColor(sdl_renderer_, 255, 255, 255, 70);
+                SDL_RenderDrawLine(sdl_renderer_, belt.x, belt.y,
+                                   belt.x + belt.w - 1, belt.y);
+                SDL_RenderDrawLine(sdl_renderer_, belt.x, belt.y + belt.h - 1,
+                                   belt.x + belt.w - 1, belt.y + belt.h - 1);
+                SDL_SetRenderDrawColor(sdl_renderer_, 0, 0, 0, 90);
+                SDL_RenderDrawLine(sdl_renderer_, belt.x, belt.y + 1,
+                                   belt.x + belt.w - 1, belt.y + 1);
+                SDL_RenderDrawLine(sdl_renderer_, belt.x, belt.y + belt.h - 2,
+                                   belt.x + belt.w - 1, belt.y + belt.h - 2);
+
+                int ty = belt_y + pad;
+                SDL_Rect tr1 = {svx + (svw - w1) / 2, ty, w1, h1};
+                SDL_RenderCopy(sdl_renderer_, tex1, nullptr, &tr1);
+                SDL_Rect tr2 = {svx + (svw - w2) / 2, ty + h1 + gap, w2, h2};
+                SDL_RenderCopy(sdl_renderer_, tex2, nullptr, &tr2);
             }
         }
     } else {
@@ -2309,7 +2461,7 @@ void Renderer::render_frame() {
         if (toast_active_) {
             auto elapsed_t = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - toast_start_).count();
-            if (elapsed_t < 1500) {
+            if (elapsed_t < toast_duration_ms_) {
 #ifdef _WIN32
                 if (toast_tex_str_ != toast_text_) {
                     if (toast_tex_) { SDL_DestroyTexture(toast_tex_); toast_tex_ = nullptr; }
@@ -2323,8 +2475,8 @@ void Renderer::render_frame() {
                 if (toast_tex_) {
                     uint8_t alpha = 255;
                     if (elapsed_t < 150) alpha = (uint8_t)(elapsed_t * 255 / 150);
-                    else if (elapsed_t > 1200)
-                        alpha = (uint8_t)((1500 - elapsed_t) * 255 / 300);
+                    else if (elapsed_t > toast_duration_ms_ - 300)
+                        alpha = (uint8_t)((toast_duration_ms_ - elapsed_t) * 255 / 300);
                     float t_scale = (float)std::max(11, btn_sz_full / 2)
                                   / std::max(28, btn_sz_full * 2);
                     int disp_tw = (int)(toast_tex_w_ * t_scale);
@@ -2907,7 +3059,7 @@ void Renderer::draw_island() {
     if (toast_active_) {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - toast_start_).count();
-        if (elapsed < 1500) {
+        if (elapsed < toast_duration_ms_) {
             show_toast = true;
             toast_h = std::max(14, btn_sz / 2) + pad;
         } else {
@@ -3187,7 +3339,8 @@ void Renderer::draw_island() {
                 now - toast_start_).count();
             uint8_t alpha = 255;
             if (elapsed < 150) alpha = (uint8_t)(elapsed * 255 / 150);
-            else if (elapsed > 1200) alpha = (uint8_t)((1500 - elapsed) * 255 / 300);
+            else if (elapsed > toast_duration_ms_ - 300)
+                alpha = (uint8_t)((toast_duration_ms_ - elapsed) * 255 / 300);
             SDL_SetTextureAlphaMod(toast_tex_, alpha);
             float t_scale = (float)std::max(11, btn_sz / 2) / std::max(28, btn_sz * 2);
             int disp_tw = (int)(toast_tex_w_ * t_scale);
@@ -3220,17 +3373,22 @@ void Renderer::draw_footer(int svx, int svy, int svw, int svh) {
         return total;
     };
 
-    // Line 2 (copyright) is rendered slightly smaller than line 1.
+    // All three footer lines render at the same (slightly smaller) size
+    // so MSEndpointMgr matches Simon visually.
     float sf2 = sf * 0.85f;
 
-    int total_w1 = line_w(footer_line1_, sf);
+    int total_w1 = line_w(footer_line1_, sf2);
     int total_w2 = line_w(footer_line2_, sf2);
-    int line_h  = footer_line1_.empty() ? 0 : (int)(footer_line1_[0].h * sf);
+    int total_w3 = line_w(footer_line3_, sf2);
+    int line_h  = footer_line1_.empty() ? 0 : (int)(footer_line1_[0].h * sf2);
     int line_h2 = footer_line2_.empty() ? 0 : (int)(footer_line2_[0].h * sf2);
+    int line_h3 = footer_line3_.empty() ? 0 : (int)(footer_line3_[0].h * sf2);
     int gap = std::max(2, line_h / 4);
 
     // Position near bottom of screen area
-    int footer_y = svy + svh - line_h - line_h2 - gap - std::max(6, svh / 25);
+    int footer_y = svy + svh - line_h - line_h2
+                 - (line_h3 > 0 ? (gap + line_h3) : 0)
+                 - gap - std::max(6, svh / 25);
 
     // Footer background band — distinct from waiting screen.
     {
@@ -3245,7 +3403,7 @@ void Renderer::draw_footer(int svx, int svy, int svw, int svh) {
     // Line 1
     int x1 = svx + (svw - total_w1) / 2;
     for (auto& s : footer_line1_) {
-        int sw = (int)(s.w * sf), sh = (int)(s.h * sf);
+        int sw = (int)(s.w * sf2), sh = (int)(s.h * sf2);
         SDL_Rect dst = {x1, footer_y, sw, sh};
         if (s.tex) SDL_RenderCopy(sdl_renderer_, s.tex, nullptr, &dst);
         if (!s.url.empty() || !s.tooltip.empty())
@@ -3263,6 +3421,20 @@ void Renderer::draw_footer(int svx, int svy, int svw, int svh) {
         if (!s.url.empty() || !s.tooltip.empty())
             footer_hits_.push_back({x2, y2, sw, sh, s.url, s.tooltip});
         x2 += sw;
+    }
+
+    // Line 3 (version on its own line)
+    if (!footer_line3_.empty()) {
+        int y3 = y2 + line_h2 + gap;
+        int x3 = svx + (svw - total_w3) / 2;
+        for (auto& s : footer_line3_) {
+            int sw = (int)(s.w * sf2), sh = (int)(s.h * sf2);
+            SDL_Rect dst = {x3, y3, sw, sh};
+            if (s.tex) SDL_RenderCopy(sdl_renderer_, s.tex, nullptr, &dst);
+            if (!s.url.empty() || !s.tooltip.empty())
+                footer_hits_.push_back({x3, y3, sw, sh, s.url, s.tooltip});
+            x3 += sw;
+        }
     }
 
     // Hover tooltip for footer segments
@@ -3346,6 +3518,37 @@ void Renderer::draw_info_panel() {
     // — reserve its slot up-front so the panel doesn't reflow when shown.
     int hint_label_h = std::max(11, (int)(22 * text_scale + 0.5f));
     total_h += spacer_h + btn_h + line_gap + hint_label_h;
+
+    // Reserve space for the footer block (MSEndpointMgr / Simon / coffee
+    // links + version + Check-for-updates button) at the bottom of the
+    // Info panel. Uses dedicated info_footer_* textures baked at the
+    // same font size as the network-requirement lines, scaled by
+    // text_scale so they share the visual weight of the surrounding
+    // body text.
+    auto info_footer_line_w = [&](const std::vector<FooterSeg>& line) {
+        int total = 0;
+        for (auto& s : line) total += (int)(s.w * text_scale);
+        return total;
+    };
+    int foot_h1 = info_footer_line1_.empty() ? 0 : (int)(info_footer_line1_[0].h * text_scale);
+    int foot_h2 = info_footer_line2_.empty() ? 0 : (int)(info_footer_line2_[0].h * text_scale);
+    int foot_h3 = info_footer_line3_.empty() ? 0 : (int)(info_footer_line3_[0].h * text_scale);
+    int foot_gap = std::max(2, foot_h1 / 4);
+    int about_h = (info_about_header_.tex)
+                      ? (int)(info_about_header_.h * text_scale) : 0;
+    int footer_block_h = (about_h > 0 ? about_h + foot_gap : 0)
+                       + (foot_h1 > 0 ? foot_h1 : 0)
+                       + (foot_h2 > 0 ? (foot_gap + foot_h2) : 0)
+                       + (foot_h3 > 0 ? (foot_gap + foot_h3) : 0);
+    if (footer_block_h > 0) total_h += spacer_h + footer_block_h;
+
+    // Reserve space for the "Check for updates" button — same recipe as
+    // the "Copy network test script" button above (button + hover hint
+    // slot) so the panel doesn't reflow on hover.
+    int chk_btn_label_h = btn_label_h;
+    int chk_btn_h = btn_h;
+    total_h += spacer_h + chk_btn_h + line_gap + hint_label_h;
+
     total_h += pad - line_gap;
 
     int panel_w = (int)(svw * 0.80f);
@@ -3464,6 +3667,145 @@ void Renderer::draw_info_panel() {
     }
 #else
     info_copy_ps_btn_ = {0, 0, 0, 0};
+#endif
+
+    // Footer block at bottom of info panel — clones the waiting-screen
+    // footer (MSEndpointMgr link / Simon link / Buy-me-a-coffee link +
+    // version) using info_footer_* textures baked at the same font size
+    // as the network-requirement lines so the visual weight matches the
+    // rest of the panel. Append to footer_hits_ so the shared click
+    // dispatcher (extended to fire while info_panel_visible_) handles
+    // link clicks.
+    if (footer_block_h > 0) {
+        // Re-clear stale hits when we're streaming, since draw_footer
+        // didn't run this frame and footer_hits_ would otherwise contain
+        // last-frame waiting-screen rects. On the waiting screen we
+        // intentionally keep the bottom-of-screen hits and APPEND.
+        if (ever_received_frame_) footer_hits_.clear();
+
+        int foot_y = panel_y + total_h - pad - chk_btn_h - line_gap
+                     - hint_label_h - spacer_h - footer_block_h;
+        // "About" header (small, same size as "Network requirements")
+        if (about_h > 0) {
+            int aw = (int)(info_about_header_.w * text_scale);
+            int ax = panel_x + (panel_w - aw) / 2;
+            SDL_Rect adst = {ax, foot_y, aw, about_h};
+            SDL_SetTextureAlphaMod(info_about_header_.tex, text_alpha);
+            SDL_RenderCopy(sdl_renderer_, info_about_header_.tex, nullptr, &adst);
+            foot_y += about_h + foot_gap;
+        }
+        auto draw_info_footer_line = [&](const std::vector<FooterSeg>& segs,
+                                          int line_y, int line_h_px) {
+            if (segs.empty()) return;
+            int total_w = info_footer_line_w(segs);
+            int fx = panel_x + (panel_w - total_w) / 2;
+            for (auto& s : segs) {
+                int sw = (int)(s.w * text_scale), sh = (int)(s.h * text_scale);
+                SDL_Rect dst = {fx, line_y, sw, sh};
+                if (s.tex) {
+                    SDL_SetTextureAlphaMod(s.tex, text_alpha);
+                    SDL_RenderCopy(sdl_renderer_, s.tex, nullptr, &dst);
+                }
+                if (!s.url.empty() || !s.tooltip.empty())
+                    footer_hits_.push_back({fx, line_y, sw, sh, s.url, s.tooltip});
+                fx += sw;
+            }
+            (void)line_h_px;
+        };
+        draw_info_footer_line(info_footer_line1_, foot_y, foot_h1);
+        int y2 = foot_y + foot_h1 + foot_gap;
+        draw_info_footer_line(info_footer_line2_, y2, foot_h2);
+        int y3 = y2 + foot_h2 + foot_gap;
+        draw_info_footer_line(info_footer_line3_, y3, foot_h3);
+
+        // Hover tooltip for footer segments — same UX as draw_footer.
+        if (info_panel_anim_ >= 1.0f) {
+            int tmx, tmy;
+            SDL_GetMouseState(&tmx, &tmy);
+            std::string hovered;
+            int hx = 0, hy = 0, hw = 0;
+            for (auto& h : footer_hits_) {
+                if (!h.tooltip.empty() && in_rect(tmx, tmy, h.x, h.y, h.w, h.h)) {
+                    hovered = h.tooltip;
+                    hx = h.x; hy = h.y; hw = h.w;
+                    break;
+                }
+            }
+            if (!hovered.empty() && tooltip_ready("infofooter:" + hovered)) {
+                draw_bezel_tooltip(hovered, hx + hw / 2, hy);
+            } else if (hovered.empty() &&
+                       hover_key_.rfind("infofooter:", 0) == 0) {
+                hover_key_.clear();
+            }
+        }
+    }
+
+    // "Check for updates" button — same visual recipe as the
+    // "Copy network test script" button above. Sits at the very bottom
+    // of the panel, with a hover hint slot reserved beneath it.
+#ifdef _WIN32
+    {
+        bool busy = update_check_in_progress_.load();
+        const char* chk_label = busy ? "Checking for updates\xE2\x80\xA6"
+                                     : "Check for updates";
+        int chk_lw = 0, chk_lh = 0;
+        SDL_Texture* chk_lab = make_text_texture(sdl_renderer_,
+            chk_label, chk_btn_label_h,
+            220, 220, 230, &chk_lw, &chk_lh);
+        int chk_btn_w = chk_lw + std::max(12, pad);
+        if (chk_btn_w > panel_w - pad * 2) chk_btn_w = panel_w - pad * 2;
+        int chk_btn_x = panel_x + (panel_w - chk_btn_w) / 2;
+        // Anchor to bottom of the panel so the button is always pinned.
+        int chk_btn_y = panel_y + total_h - pad - hint_label_h - line_gap - chk_btn_h;
+        info_check_btn_ = {chk_btn_x, chk_btn_y, chk_btn_w, chk_btn_h};
+
+        bool chk_hov = info_panel_anim_ >= 1.0f && !busy &&
+                       in_rect(mx, my, chk_btn_x, chk_btn_y, chk_btn_w, chk_btn_h);
+        uint8_t chk_bg = busy ? 40 : (chk_hov ? 70 : 50);
+        SDL_SetRenderDrawColor(sdl_renderer_, chk_bg, chk_bg, chk_bg + 8, alpha);
+        SDL_Rect chk_br = {chk_btn_x, chk_btn_y, chk_btn_w, chk_btn_h};
+        SDL_RenderFillRect(sdl_renderer_, &chk_br);
+        SDL_SetRenderDrawColor(sdl_renderer_, 110, 110, 130,
+                               (uint8_t)(180 * info_panel_anim_));
+        SDL_RenderDrawRect(sdl_renderer_, &chk_br);
+
+        if (chk_lab) {
+            uint8_t lr = busy ? 160 : (chk_hov ? 255 : 220);
+            uint8_t lg = busy ? 160 : (chk_hov ? 255 : 220);
+            uint8_t lb = busy ? 170 : (chk_hov ? 255 : 230);
+            SDL_SetTextureColorMod(chk_lab, lr, lg, lb);
+            SDL_SetTextureAlphaMod(chk_lab, text_alpha);
+            SDL_Rect ldst = {chk_btn_x + (chk_btn_w - chk_lw) / 2,
+                             chk_btn_y + (chk_btn_h - chk_lh) / 2,
+                             chk_lw, chk_lh};
+            SDL_RenderCopy(sdl_renderer_, chk_lab, nullptr, &ldst);
+            SDL_DestroyTexture(chk_lab);
+        }
+
+        // Hover hint, mirrors the copy-ps button hint slot.
+        if (chk_hov) {
+            int hw = 0, hh = 0;
+            SDL_Texture* hint = make_text_texture(sdl_renderer_,
+                "Check GitHub for a newer release.",
+                hint_label_h, 150, 150, 160, &hw, &hh);
+            if (hint) {
+                int max_w = panel_w - pad * 2;
+                int draw_w = hw, draw_h = hh;
+                if (hw > max_w) {
+                    float s = (float)max_w / hw;
+                    draw_w = max_w;
+                    draw_h = (int)(hh * s);
+                }
+                SDL_SetTextureAlphaMod(hint, text_alpha);
+                SDL_Rect hdst = {panel_x + (panel_w - draw_w) / 2,
+                                 chk_btn_y + chk_btn_h + line_gap, draw_w, draw_h};
+                SDL_RenderCopy(sdl_renderer_, hint, nullptr, &hdst);
+                SDL_DestroyTexture(hint);
+            }
+        }
+    }
+#else
+    info_check_btn_ = {0, 0, 0, 0};
 #endif
 }
 
@@ -3693,9 +4035,10 @@ void Renderer::draw_settings_panel() {
     int swatch_rows = (N_PRESETS + swatches_per_row - 1) / swatches_per_row;
     int total_h = pad + title_h + row_gap
                 + swatch_rows * (swatch + row_gap)
-                + row_gap + label_h + row_gap            // toggle 1
-                + label_h + row_gap                       // toggle 2
+                + row_gap + label_h + row_gap            // toggle 1 (save)
+                + label_h + row_gap                       // toggle 2 (clipboard)
                 + label_h + row_gap                       // toggle 3 (computer name)
+                + label_h + row_gap                       // toggle 4 (file log)
                 + label_h + row_gap                       // recording format row
                 + pad;
 
@@ -3873,6 +4216,7 @@ void Renderer::draw_settings_panel() {
             SDL_DestroyTexture(lt);
         }
     }
+    cy += label_h + row_gap * 2;
 }
 
 void Renderer::clear_log_row_cache() {
@@ -5128,6 +5472,98 @@ void Renderer::open_screenshot_folder() {
     std::filesystem::create_directories(screenshot_dir_);
     ShellExecuteA(nullptr, "explore", screenshot_dir_.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #endif
+}
+
+void Renderer::show_toast(const std::string& text, int duration_ms) {
+    toast_text_ = text;
+    toast_duration_ms_ = std::max(600, duration_ms);
+    toast_active_ = true;
+    toast_start_ = std::chrono::steady_clock::now();
+}
+
+// Sample a sparse grid of pixels in last_frame_data_ and report whether
+// every sample is "near black". Used to detect FLAG_SECURE / lock-screen
+// content: Android's MediaProjection capture delivers an all-black surface
+// for protected windows and the framework deliberately hides the cause.
+// We sample only ~16x16 = 256 pixels regardless of resolution (effectively
+// free at 1080p+) and require an extremely dark threshold so genuine
+// dark-mode UI won't trigger the overlay.
+bool Renderer::is_frame_near_black() const {
+    if (last_frame_data_.empty() || last_frame_w_ <= 0 || last_frame_h_ <= 0) {
+        return false;
+    }
+    constexpr int kGrid = 16;
+    constexpr int kThreshold = 12; // 0..255 per channel
+    // Restrict sampling to the central 60% of the frame so the top status
+    // bar (clock, battery, signal icons) and bottom nav bar/keyboard
+    // suggestion strip — which remain bright even when an app uses
+    // FLAG_SECURE on its own window — don't disqualify an otherwise
+    // blacked-out content area.
+    const int x0 = last_frame_w_ * 20 / 100;
+    const int x1 = last_frame_w_ * 80 / 100;
+    const int y0 = last_frame_h_ * 20 / 100;
+    const int y1 = last_frame_h_ * 80 / 100;
+    const int rw = std::max(1, x1 - x0);
+    const int rh = std::max(1, y1 - y0);
+    const uint8_t* p = last_frame_data_.data();
+    for (int gy = 0; gy < kGrid; ++gy) {
+        int y = y0 + (gy * 2 + 1) * rh / (kGrid * 2);
+        if (y >= last_frame_h_) y = last_frame_h_ - 1;
+        const uint8_t* row = p + (size_t)y * last_frame_stride_;
+        for (int gx = 0; gx < kGrid; ++gx) {
+            int x = x0 + (gx * 2 + 1) * rw / (kGrid * 2);
+            if (x >= last_frame_w_) x = last_frame_w_ - 1;
+            const uint8_t* px = row + x * 4;
+            if (px[0] > kThreshold || px[1] > kThreshold || px[2] > kThreshold) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void Renderer::check_for_update_async(bool show_when_up_to_date) {
+    bool expected = false;
+    if (!update_check_in_progress_.compare_exchange_strong(expected, true)) {
+        // Already running — silently coalesce.
+        return;
+    }
+    // Format the running version once on the calling thread; the worker
+    // thread only touches its own locals plus the renderer fields it owns.
+    char ver[32];
+    std::snprintf(ver, sizeof(ver), "%d.%d.%d",
+                  OPENMIRROR_VERSION_MAJOR,
+                  OPENMIRROR_VERSION_MINOR,
+                  OPENMIRROR_VERSION_PATCH);
+    std::string current = ver;
+
+    std::thread([this, current, show_when_up_to_date]() {
+        auto result = openmirror::network::check_for_update(current);
+        {
+            std::lock_guard<std::mutex> lk(update_check_mutex_);
+            update_latest_version_ = result.latest_version;
+            update_release_url_    = result.release_url;
+        }
+        // Surface the outcome via the existing toast banner. The renderer
+        // event loop polls toast state, so just setting these strings from
+        // a worker thread is safe enough for our purposes (single writer
+        // because update_check_in_progress_ is the latch).
+        if (!result.ok) {
+            if (show_when_up_to_date) {
+                show_toast("Update check failed (no internet?)", 3000);
+            }
+            // Silent on launch when the network is unreachable.
+        } else if (result.update_available) {
+            std::string msg = "Update available: v" + result.latest_version
+                            + " \u2014 see GitHub releases";
+            show_toast(msg, 8000);
+            std::cout << "[Update] New version available: " << result.latest_version
+                      << " (current " << current << ") " << result.release_url << "\n";
+        } else if (show_when_up_to_date) {
+            show_toast("You're up to date (v" + current + ")", 3000);
+        }
+        update_check_in_progress_.store(false);
+    }).detach();
 }
 
 std::string Renderer::make_recording_path() const {

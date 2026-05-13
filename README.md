@@ -125,6 +125,7 @@ button on the menu (or use the Windows file dialog) to open it.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **0.3.5** | 13.05.2026 | Version check and UI tunings. In-app GitHub update check, Info panel "About" section, polished footer typography. |
 | **0.3.4** | 13.05.2026 | New Android discovery routine for easy connect. |
 | **0.3.3** | 12.05.2026 | Right-click the resize grip to reset the window to its default size. |
 | **0.3.2** | 11.05.2026 | User interface fixes. |

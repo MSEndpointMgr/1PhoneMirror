@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(1PhoneMirror VERSION 0.3.4 LANGUAGES C CXX)
+project(1PhoneMirror VERSION 0.3.5 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -46,6 +46,7 @@ set(MEDIA_SOURCES
 set(NETWORK_SOURCES
     src/network/tcp_server.cpp
     src/network/rtsp_server.cpp
+    src/network/update_check.cpp
 )
 
 set(CORE_SOURCES
@@ -150,7 +151,7 @@ if(ENABLE_ANDROID)
 endif()
 
 if(WIN32)
-    target_link_libraries(1PhoneMirror PRIVATE ws2_32)
+    target_link_libraries(1PhoneMirror PRIVATE ws2_32 winhttp)
     target_compile_definitions(1PhoneMirror PRIVATE NOMINMAX)
     # Embed app manifest for DPI awareness (disable auto-generated manifest to avoid duplicate)
     target_sources(1PhoneMirror PRIVATE resources/openmirror.rc)

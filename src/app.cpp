@@ -518,6 +518,12 @@ bool App::init(const Config& config) {
     std::cout << "  Press F for fullscreen, P to toggle phone frame,\n";
     std::cout << "  Ctrl+S to screenshot, ESC to quit.\n\n";
 
+    // Silent on-launch update check. The renderer spawns its own worker
+    // thread, queries the GitHub releases API, and shows a toast only when
+    // a newer version exists or (manually invoked) when explicitly asked.
+    // Network failures are swallowed silently per product spec.
+    renderer_.check_for_update_async(false);
+
     running_.store(true);
     return true;
 }

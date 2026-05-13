@@ -32,6 +32,12 @@ public:
     void set_phone_frame_enabled(bool enabled) { phone_frame_enabled_ = enabled; }
     bool phone_frame_enabled() const { return phone_frame_enabled_; }
 
+    // Kicks off a background GitHub-releases poll. When `show_when_up_to_date`
+    // is true (manual check from the Settings panel) the renderer surfaces a
+    // toast even when no newer version exists. On launch the App calls this
+    // with false so a missing/blocked network is invisible to the user.
+    void check_for_update_async(bool show_when_up_to_date);
+
     // PIN overlay (used by AirPlay PIN pairing). Pass an empty string to clear.
     void set_pin_code(const std::string& pin);
 
@@ -208,6 +214,11 @@ private:
     SDL_Texture* toast_tex_ = nullptr;
     int toast_tex_w_ = 0, toast_tex_h_ = 0;
     std::string toast_tex_str_;
+    // Per-toast lifetime in ms. Defaults to 1500 (the original hard-coded
+    // value used by all transient confirmations like "Saved to Pictures").
+    // Long messages such as the on-launch update prompt bump this up.
+    int toast_duration_ms_ = 1500;
+    void show_toast(const std::string& text, int duration_ms = 1500);
 
     // Tooltip
     SDL_Texture* tooltip_tex_ = nullptr;
@@ -250,6 +261,18 @@ private:
     SDL_Texture* pending_overlay_tex_ = nullptr;
     int pending_overlay_w_ = 0, pending_overlay_h_ = 0;
 
+    // Protected/blank-content detector. The Android capture path returns
+    // an all-black surface for any window with FLAG_SECURE (lock screen,
+    // banking apps, DRM video, MDM-restricted documents). The framework
+    // hides the cause from us, so we heuristically detect a sustained
+    // near-black frame and surface a non-modal overlay.
+    std::chrono::steady_clock::time_point black_frame_since_;
+    bool black_frame_active_ = false;     // currently in a black streak
+    bool protected_overlay_visible_ = false;
+    SDL_Texture* protected_overlay_tex_ = nullptr;
+    int protected_overlay_w_ = 0, protected_overlay_h_ = 0;
+    bool is_frame_near_black() const;
+
     // Cast instructions
     SDL_Texture* ios_instr_tex_ = nullptr;
     int ios_instr_w_ = 0, ios_instr_h_ = 0;
@@ -267,7 +290,11 @@ private:
         std::string url;
         std::string tooltip;
     };
-    std::vector<FooterSeg> footer_line1_, footer_line2_;
+    std::vector<FooterSeg> footer_line1_, footer_line2_, footer_line3_;
+    // Same content as the waiting-screen footer, but baked at the
+    // smaller font size used by the Info panel's network-requirement
+    // lines so the visual weight matches the surrounding text.
+    std::vector<FooterSeg> info_footer_line1_, info_footer_line2_, info_footer_line3_;
     struct FooterHit { int x = 0, y = 0, w = 0, h = 0; std::string url; std::string tooltip; };
     std::vector<FooterHit> footer_hits_;
     SDL_Texture* footer_tooltip_tex_ = nullptr;
@@ -284,11 +311,18 @@ private:
     // Info panel — copies a PowerShell troubleshooting script (firewall
     // rules + listening ports) to the clipboard.
     BtnRect info_copy_ps_btn_;
+    // "Check for updates" button at the very bottom of the Info panel.
+    // Same visual style as the "Copy network test script" button.
+    BtnRect info_check_btn_;
     struct InfoLine {
         SDL_Texture* tex = nullptr;
         int w = 0, h = 0;
     };
     std::vector<InfoLine> info_lines_;
+    // Small "About" header rendered above the footer block in the Info
+    // panel. Same point size / colour as the "Network requirements"
+    // section header so it visually pairs with it.
+    InfoLine info_about_header_;
 
     // Version panel
     bool version_panel_visible_ = false;
@@ -319,6 +353,14 @@ private:
     bool log_to_file_session_ = false;
     BtnRect settings_fmt_mp4_btn_;
     BtnRect settings_fmt_gif_btn_;
+    // Update-check state (the manual "Check for updates" link lives in
+    // the Info panel footer, not the Settings panel anymore).
+    std::atomic<bool> update_check_in_progress_{false};
+    // Last-known release URL (filled by the update checker). Clicking the
+    // "Update available" toast/banner will open this in the browser.
+    std::mutex update_check_mutex_;
+    std::string update_latest_version_;
+    std::string update_release_url_;
     void draw_settings_panel();
     void apply_bezel_color(uint8_t r, uint8_t g, uint8_t b);
     // Drawer / sub-panel base colour derived from the current bezel colour
