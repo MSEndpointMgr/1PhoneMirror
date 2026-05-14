@@ -14,6 +14,7 @@
 struct SDL_Window;
 struct SDL_Renderer;
 struct SDL_Texture;
+union SDL_Event;
 
 namespace openmirror::media {
 
@@ -417,6 +418,75 @@ private:
     std::string screenshot_dir_;
     std::atomic<bool> running_{false};
     std::atomic<bool> reset_requested_{false};
+
+    // ---- Screenshot annotation overlay (Ctrl+Shift+S) ----
+    // Modal editor: freezes the current composited screenshot, lets the
+    // user mark it up with arrow / rectangle / highlight / pixelate
+    // strokes, then routes the baked PNG through the same save +
+    // clipboard pipeline as a plain Ctrl+S.
+    enum class AnnoTool { Arrow, Rect, Highlight, Pixelate, Text };
+    struct AnnoStroke {
+        AnnoTool tool = AnnoTool::Arrow;
+        // Image-space coordinates (in the captured RGBA buffer).
+        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        // Stroke colour. Pixelate ignores this.
+        uint8_t r = 235, g = 80, b = 80;
+        // Line thickness in image-space pixels. Used by Arrow + Rect.
+        int thickness = 8;
+        // Pre-computed mosaic block colours for Pixelate strokes.
+        // Layout: row-major, `pix_cols` × `pix_rows` of packed RGB.
+        std::vector<uint32_t> pix_blocks;
+        int pix_cols = 0, pix_rows = 0;
+        int pix_block_size = 0;
+        int pix_origin_x = 0, pix_origin_y = 0;
+        // Text strokes only: the typed string and target glyph height in
+        // image-space pixels. text_tex is owned by the renderer's stroke
+        // list and freed in end_annotation().
+        std::string text;
+        int font_px = 0;
+        SDL_Texture* text_tex = nullptr;
+        int text_w = 0, text_h = 0;
+    };
+    bool annotator_active_ = false;
+    SDL_Texture* annotator_bg_tex_ = nullptr;
+    std::vector<uint8_t> annotator_bg_orig_;   // original captured RGBA
+    int annotator_bg_w_ = 0, annotator_bg_h_ = 0;
+    std::vector<AnnoStroke> annotator_strokes_;
+    AnnoTool annotator_tool_ = AnnoTool::Arrow;
+    int annotator_color_idx_ = 0;              // index into k_anno_palette
+    int annotator_line_width_ = 8;             // image-space px (1..32)
+    bool annotator_drawing_ = false;
+    int annotator_drag_x0_ = 0, annotator_drag_y0_ = 0;
+    int annotator_drag_x1_ = 0, annotator_drag_y1_ = 0;
+    // Text-input mode (Text tool): user clicked, now typing into a buffer
+    // anchored at (text_x_, text_y_) in image space. Rendered live; not
+    // committed as a stroke until Enter or click-elsewhere.
+    bool annotator_text_input_active_ = false;
+    std::string annotator_text_buf_;
+    int annotator_text_x_ = 0, annotator_text_y_ = 0;
+    int annotator_text_font_px_ = 0;
+    SDL_Texture* annotator_text_preview_tex_ = nullptr;
+    int annotator_text_preview_w_ = 0, annotator_text_preview_h_ = 0;
+    std::string annotator_text_preview_cached_; // last text used for cache
+    // Slider drag state for the line-width control.
+    bool annotator_slider_drag_ = false;
+    // Display mapping for image-to-window coords (recomputed each frame).
+    int annotator_dst_x_ = 0, annotator_dst_y_ = 0;
+    int annotator_dst_w_ = 0, annotator_dst_h_ = 0;
+    // Toolbar hit rects (recomputed each frame).
+    BtnRect anno_btn_arrow_, anno_btn_rect_, anno_btn_highlight_, anno_btn_pixelate_, anno_btn_text_;
+    BtnRect anno_slider_rect_;
+    BtnRect anno_swatch_btns_[5];
+    BtnRect anno_btn_undo_, anno_btn_save_, anno_btn_cancel_;
+    void begin_annotation();
+    void end_annotation();
+    void save_annotated();
+    void draw_annotator();
+    bool handle_annotator_event(const SDL_Event& ev); // returns true if consumed
+    void bake_pixelate_stroke(AnnoStroke& s) const;
+    void rasterize_strokes_to(uint8_t* rgba, int w, int h, int stride) const;
+    void commit_text_stroke();
+    void rebuild_text_preview();
 
     // Android connect panel (in-app, themed to match info panel)
     bool android_panel_visible_ = false;

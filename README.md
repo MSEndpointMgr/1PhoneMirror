@@ -125,6 +125,7 @@ button on the menu (or use the Windows file dialog) to open it.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **0.3.6** | 14.05.2026 | **Screenshot annotation** (`Ctrl+Shift+S`): arrow, rectangle, highlight, pixelate and text tools, 5-colour palette, line-width slider, undo, save (PNG + clipboard). |
 | **0.3.5** | 13.05.2026 | Version check and UI tunings. In-app GitHub update check, Info panel "About" section, polished footer typography. |
 | **0.3.4** | 13.05.2026 | New Android discovery routine for easy connect. |
 | **0.3.3** | 12.05.2026 | Right-click the resize grip to reset the window to its default size. |
@@ -139,6 +140,11 @@ button on the menu (or use the Windows file dialog) to open it.
 | **0.2.0** | 06.05.2026 | Android mirroring (Wireless debugging, press `A`). |
 | **0.1.6** | 06.05.2026 | Multiple iOS devices stay paired — switch from bezel dots. |
 | **0.1.5** | 06.05.2026 | AirPlay PIN pairing for trusted-device security. |
+| **0.1.4** | 06.05.2026 | Slide-out log viewer with live filtering (press `L`). |
+| **0.1.2** | 05.05.2026 | Dynamic island menu in top bezel for quick actions. |
+| **0.1.1** | 05.05.2026 | Screenshot capture to clipboard and Pictures folder. |
+| **0.1.0** | 05.05.2026 | iOS AirPlay support. |
+| **0.0.5** | 04.05.2026 | Initial ideas and implementation. |
 
 The full version log is also available in-app — press `V`.
 

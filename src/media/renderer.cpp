@@ -493,7 +493,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         footer_line1_.push_back(seg(L"1PhoneMirror by ", 120, 120, 120));
         footer_line1_.push_back(seg(L"MSEndpointMgr", 120, 120, 120,
                                      "https://msendpointmgr.com/", "Open MSEndpointMgr"));
-        // Line 2: "(c) 2026 \u266B Simon Skotheimsvik, MVP \u00B7 v0.3.5"
+        // Line 2: "(c) 2026 \u266B Simon Skotheimsvik, MVP \u00B7 v0.3.6"
         footer_line2_.push_back(seg(L"\u00A9 2026 ", 100, 100, 100));
         // Beamed-eighth-notes glyph — render via Segoe UI Symbol so it works
         // on Windows builds where the regular Segoe UI font lacks U+266B.
@@ -511,9 +511,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
                                      "https://buymeacoffee.com/simonskothn",
                                      "Buy me a coffee",
                                      L"Segoe UI Symbol"));
-        // Line 3: " · v0.3.5" — broken onto its own line so the second
+        // Line 3: " · v0.3.6" — broken onto its own line so the second
         // line stays a comfortable width on narrow phone aspects.
-        footer_line3_.push_back(seg(L"v0.3.5", 100, 100, 100,
+        footer_line3_.push_back(seg(L"v0.3.6", 100, 100, 100,
                                      "", "Version history (V)"));
 
         // Mirror the same content for the Info panel, but baked at the
@@ -543,7 +543,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
                                            "https://buymeacoffee.com/simonskothn",
                                            "Buy me a coffee",
                                            L"Segoe UI Symbol"));
-        info_footer_line3_.push_back(iseg(L"v0.3.5", 130, 130, 130,
+        info_footer_line3_.push_back(iseg(L"v0.3.6", 130, 130, 130,
                                            "", "Version history (V)"));
     }
 #endif
@@ -557,12 +557,13 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
             line.tex = make_text_texture_w(sdl_renderer_, text, font_sz, r, g, b, &line.w, &line.h);
             return line;
         };
-        info_lines_.push_back(make_info(L"1PhoneMirror v0.3.5", 44, 255, 255, 255));
+        info_lines_.push_back(make_info(L"1PhoneMirror v0.3.6", 44, 255, 255, 255));
         info_lines_.push_back(make_info(L"AirPlay (iOS) \u00B7 scrcpy (Android)", 34, 160, 160, 160));
         info_lines_.push_back({nullptr, 0, 0}); // spacer
         info_lines_.push_back(make_info(L"(F) Fullscreen \u00B7 (M) Menu \u00B7 (L) Log \u00B7 (A) Add Android", 30, 130, 130, 130));
         info_lines_.push_back(make_info(L"(I) Info \u00B7 (V) Version \u00B7 (S) Settings \u00B7 (Esc) Quit", 30, 130, 130, 130));
-        info_lines_.push_back(make_info(L"(Ctrl+S) Screenshot \u00B7 In log: (Ctrl+C) Copy \u00B7 (Ctrl+X) Clear", 30, 130, 130, 130));
+        info_lines_.push_back(make_info(L"(Ctrl+S) Screenshot \u00B7 (Ctrl+Shift+S) Annotate", 30, 130, 130, 130));
+        info_lines_.push_back(make_info(L"In log: (Ctrl+C) Copy \u00B7 (Ctrl+X) Clear", 30, 130, 130, 130));
         info_lines_.push_back({nullptr, 0, 0}); // spacer
         info_lines_.push_back(make_info(L"Network requirements", 34, 160, 160, 160));
         info_lines_.push_back(make_info(L"Same Wi-Fi / VLAN as the phone, mDNS (UDP 5353) allowed", 30, 130, 130, 130));
@@ -588,6 +589,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
+        version_lines_.push_back(make_ver(L"14.05.2026 \u2013 0.3.6", 34, 200, 200, 255));
+        version_lines_.push_back(make_ver(L"Screenshot annotation (Ctrl+Shift+S): arrow, rectangle, highlight, pixelate, text", 30, 160, 160, 160));
+        version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"13.05.2026 \u2013 0.3.5", 34, 200, 200, 255));
         version_lines_.push_back(make_ver(L"Version check and UI tunings", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
@@ -802,6 +806,12 @@ void Renderer::run() {
     while (running_.load()) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            // Screenshot annotator is modal: while it's up, every event
+            // gets routed through it first and most are swallowed.
+            if (annotator_active_) {
+                if (event.type == SDL_QUIT) { running_.store(false); return; }
+                if (handle_annotator_event(event)) continue;
+            }
             switch (event.type) {
             case SDL_QUIT:
                 running_.store(false);
@@ -898,7 +908,18 @@ void Renderer::run() {
                         settings_panel_anim_start_ = std::chrono::steady_clock::now();
                     }
                 }
-                if (event.key.keysym.sym == SDLK_s && (event.key.keysym.mod & KMOD_CTRL)) {
+                if (event.key.keysym.sym == SDLK_s &&
+                    (event.key.keysym.mod & KMOD_CTRL) &&
+                    (event.key.keysym.mod & KMOD_SHIFT)) {
+                    // Ctrl+Shift+S: open the screenshot annotator on the
+                    // current composited frame. Handled before plain Ctrl+S
+                    // so the shifted shortcut wins.
+                    begin_annotation();
+                    btn_flash_ = true;
+                    btn_flash_start_ = std::chrono::steady_clock::now();
+                } else if (event.key.keysym.sym == SDLK_s &&
+                           (event.key.keysym.mod & KMOD_CTRL) &&
+                           !(event.key.keysym.mod & KMOD_SHIFT)) {
                     screenshot_requested_ = true;
                     btn_flash_ = true;
                     btn_flash_start_ = std::chrono::steady_clock::now();
@@ -1104,6 +1125,14 @@ void Renderer::run() {
                                in_rect(mx, my, bezel_record_btn_.x, bezel_record_btn_.y,
                                        bezel_record_btn_.w, bezel_record_btn_.h)) {
                         target = "record";
+                    } else if (screenshot_btn_.w > 0 &&
+                               in_rect(mx, my, screenshot_btn_.x, screenshot_btn_.y,
+                                       screenshot_btn_.w, screenshot_btn_.h)) {
+                        target = "screenshot";
+                    } else if (bezel_screenshot_btn_.w > 0 &&
+                               in_rect(mx, my, bezel_screenshot_btn_.x, bezel_screenshot_btn_.y,
+                                       bezel_screenshot_btn_.w, bezel_screenshot_btn_.h)) {
+                        target = "screenshot";
                     } else if (phone_frame_enabled_ && resize_grip_.w > 0 &&
                                in_rect(mx, my, resize_grip_.x, resize_grip_.y,
                                        resize_grip_.w, resize_grip_.h)) {
@@ -1169,6 +1198,18 @@ void Renderer::run() {
                             } else if (clicked_action == "clear") {
                                 openmirror::LogBuffer::instance().clear();
                                 std::cout << "[Renderer] Log cleared\n";
+                            } else if (tgt == "screenshot") {
+                                if (clicked_action == "shot") {
+                                    screenshot_requested_ = true;
+                                    btn_flash_ = true;
+                                    btn_flash_start_ = std::chrono::steady_clock::now();
+                                } else if (clicked_action == "annotate") {
+                                    begin_annotation();
+                                    btn_flash_ = true;
+                                    btn_flash_start_ = std::chrono::steady_clock::now();
+                                } else if (clicked_action == "open_dir") {
+                                    open_screenshot_folder();
+                                }
                             } else if (tgt == "resize" && clicked_action == "reset_size") {
                                 // Reset window to the same default size used
                                 // at first launch — based on the active
@@ -2731,6 +2772,10 @@ void Renderer::render_frame() {
             }
         } else if (bezel_menu_target_ == "resize") {
             items.push_back({"reset_size", "Reset to default size"});
+        } else if (bezel_menu_target_ == "screenshot") {
+            items.push_back({"shot",     "Take screenshot (Ctrl+S)"});
+            items.push_back({"annotate", "Annotate screenshot (Ctrl+Shift+S)"});
+            items.push_back({"open_dir", "Open screenshot folder"});
         }
         if (items.empty()) {
             bezel_menu_visible_ = false;
@@ -2794,6 +2839,12 @@ void Renderer::render_frame() {
             } else if (bezel_menu_target_ == "record") {
                 // Record button lives in the top island — slide DOWN from
                 // the cursor so the menu doesn't crash into the window top.
+                panel_x = bezel_menu_anchor_x_ - panel_w / 2;
+                panel_y = bezel_menu_anchor_y_ + 12;
+                dy = -(int)(panel_h * 0.3f);
+            } else if (bezel_menu_target_ == "screenshot") {
+                // Screenshot button is also in the top island — match the
+                // record menu and drop the popup below the cursor.
                 panel_x = bezel_menu_anchor_x_ - panel_w / 2;
                 panel_y = bezel_menu_anchor_y_ + 12;
                 dy = -(int)(panel_h * 0.3f);
@@ -2875,6 +2926,11 @@ void Renderer::render_frame() {
 
     // PIN overlay (drawn last, on top of everything)
     draw_pin_overlay();
+
+    // Screenshot annotator (drawn above PIN so the modal editor wins).
+    if (annotator_active_) {
+        draw_annotator();
+    }
 
     SDL_RenderPresent(sdl_renderer_);
 
@@ -5472,6 +5528,1200 @@ void Renderer::open_screenshot_folder() {
     std::filesystem::create_directories(screenshot_dir_);
     ShellExecuteA(nullptr, "explore", screenshot_dir_.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #endif
+}
+
+// ---- Screenshot annotation overlay (Ctrl+Shift+S) ----
+//
+// Snapshots the current composited frame (same buffer that take_screenshot
+// would write), then enters a modal markup mode with a small floating
+// toolbar: arrow / rectangle / highlight / pixelate, four colour swatches,
+// undo, save and cancel. Save bakes the strokes back into the captured
+// RGBA and re-uses the same write+clipboard logic as a plain screenshot.
+
+namespace {
+
+// Five-colour palette — kept tiny on purpose; v1 is a quick-markup tool,
+// not a paint program. Order: red, yellow, green, black, white.
+struct AnnoColor { uint8_t r, g, b; };
+constexpr AnnoColor k_anno_palette[5] = {
+    {235,  80,  80},  // red
+    {245, 205,  60},  // yellow
+    { 90, 200, 110},  // green
+    { 20,  20,  20},  // black
+    {245, 245, 245},  // white
+};
+
+// Pixelate block size in image-space pixels. 12 is coarse enough that
+// faces / phone numbers / OTPs are unreadable but fine enough that the
+// general layout is preserved.
+constexpr int k_anno_pix_block = 12;
+
+// Average a `block`x`block` patch of RGBA at (sx,sy) inside src into a
+// packed 0xRRGGBB. Out-of-bounds reads are clamped.
+inline uint32_t avg_block_rgb(const uint8_t* src, int w, int h, int stride,
+                              int sx, int sy, int block) {
+    uint32_t rsum = 0, gsum = 0, bsum = 0, n = 0;
+    int x0 = std::max(0, sx);
+    int y0 = std::max(0, sy);
+    int x1 = std::min(w, sx + block);
+    int y1 = std::min(h, sy + block);
+    for (int yy = y0; yy < y1; ++yy) {
+        const uint8_t* row = src + yy * stride;
+        for (int xx = x0; xx < x1; ++xx) {
+            const uint8_t* p = row + xx * 4;
+            rsum += p[0]; gsum += p[1]; bsum += p[2]; ++n;
+        }
+    }
+    if (n == 0) return 0;
+    return ((rsum / n) << 16) | ((gsum / n) << 8) | (bsum / n);
+}
+
+// Bresenham-style thick line into RGBA. Used by the bake step so the
+// annotated PNG matches what the user saw in the editor.
+inline void plot_disc_rgba(uint8_t* rgba, int w, int h, int stride,
+                           int cx, int cy, int rad,
+                           uint8_t r, uint8_t g, uint8_t b) {
+    int r2 = rad * rad;
+    int x0 = std::max(0, cx - rad), x1 = std::min(w - 1, cx + rad);
+    int y0 = std::max(0, cy - rad), y1 = std::min(h - 1, cy + rad);
+    for (int y = y0; y <= y1; ++y) {
+        for (int x = x0; x <= x1; ++x) {
+            int dx = x - cx, dy = y - cy;
+            if (dx * dx + dy * dy <= r2) {
+                uint8_t* p = rgba + y * stride + x * 4;
+                p[0] = r; p[1] = g; p[2] = b; p[3] = 255;
+            }
+        }
+    }
+}
+
+inline void thick_line_rgba(uint8_t* rgba, int w, int h, int stride,
+                            int x0, int y0, int x1, int y1, int thick,
+                            uint8_t r, uint8_t g, uint8_t b) {
+    int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    int rad = std::max(1, thick / 2);
+    while (true) {
+        plot_disc_rgba(rgba, w, h, stride, x0, y0, rad, r, g, b);
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+inline void rect_outline_rgba(uint8_t* rgba, int w, int h, int stride,
+                              int rx, int ry, int rw, int rh, int thick,
+                              uint8_t r, uint8_t g, uint8_t b) {
+    thick_line_rgba(rgba, w, h, stride, rx, ry, rx + rw, ry, thick, r, g, b);
+    thick_line_rgba(rgba, w, h, stride, rx, ry + rh, rx + rw, ry + rh, thick, r, g, b);
+    thick_line_rgba(rgba, w, h, stride, rx, ry, rx, ry + rh, thick, r, g, b);
+    thick_line_rgba(rgba, w, h, stride, rx + rw, ry, rx + rw, ry + rh, thick, r, g, b);
+}
+
+inline void filled_rect_blend_rgba(uint8_t* rgba, int w, int h, int stride,
+                                   int rx, int ry, int rw, int rh,
+                                   uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    int x0 = std::max(0, rx), y0 = std::max(0, ry);
+    int x1 = std::min(w, rx + rw), y1 = std::min(h, ry + rh);
+    float alpha = a / 255.0f, inv = 1.0f - alpha;
+    for (int y = y0; y < y1; ++y) {
+        for (int x = x0; x < x1; ++x) {
+            uint8_t* p = rgba + y * stride + x * 4;
+            p[0] = (uint8_t)(r * alpha + p[0] * inv);
+            p[1] = (uint8_t)(g * alpha + p[1] * inv);
+            p[2] = (uint8_t)(b * alpha + p[2] * inv);
+            // Keep alpha at 255 — captured frame is already opaque.
+        }
+    }
+}
+
+// Draw a filled triangle (arrow head) into RGBA. Standard half-space test.
+inline void fill_triangle_rgba(uint8_t* rgba, int w, int h, int stride,
+                               int ax, int ay, int bx, int by, int cx, int cy,
+                               uint8_t r, uint8_t g, uint8_t b) {
+    int xmin = std::max(0, std::min({ax, bx, cx}));
+    int xmax = std::min(w - 1, std::max({ax, bx, cx}));
+    int ymin = std::max(0, std::min({ay, by, cy}));
+    int ymax = std::min(h - 1, std::max({ay, by, cy}));
+    auto edge = [](int x0, int y0, int x1, int y1, int x, int y) {
+        return (x - x0) * (y1 - y0) - (y - y0) * (x1 - x0);
+    };
+    for (int y = ymin; y <= ymax; ++y) {
+        for (int x = xmin; x <= xmax; ++x) {
+            int e0 = edge(ax, ay, bx, by, x, y);
+            int e1 = edge(bx, by, cx, cy, x, y);
+            int e2 = edge(cx, cy, ax, ay, x, y);
+            if ((e0 >= 0 && e1 >= 0 && e2 >= 0) ||
+                (e0 <= 0 && e1 <= 0 && e2 <= 0)) {
+                uint8_t* p = rgba + y * stride + x * 4;
+                p[0] = r; p[1] = g; p[2] = b; p[3] = 255;
+            }
+        }
+    }
+}
+
+// Render a single line of text into a freshly-allocated RGBA buffer, in
+// the same colour `cr,cg,cb`. Alpha comes from the GDI ClearType
+// luminance, so callers can alpha-blend the result onto another RGBA
+// surface. Returns true on success and writes into `out`. Used by the
+// annotator's save path to bake Text strokes into the PNG.
+inline bool make_text_rgba_buffer(const std::string& text, int font_height,
+                                  uint8_t cr, uint8_t cg, uint8_t cb,
+                                  std::vector<uint8_t>& out, int& out_w, int& out_h) {
+    out.clear();
+    out_w = out_h = 0;
+    if (text.empty() || font_height <= 0) return false;
+    HDC hdc = CreateCompatibleDC(nullptr);
+    if (!hdc) return false;
+    HFONT font = CreateFontA(
+        -font_height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_NATURAL_QUALITY, DEFAULT_PITCH | FF_SWISS, "Segoe UI");
+    HFONT old_font = (HFONT)SelectObject(hdc, font);
+    SIZE sz;
+    GetTextExtentPoint32A(hdc, text.c_str(), (int)text.size(), &sz);
+    if (sz.cx <= 0 || sz.cy <= 0) {
+        SelectObject(hdc, old_font); DeleteObject(font); DeleteDC(hdc);
+        return false;
+    }
+    TEXTMETRICA tm;
+    if (GetTextMetricsA(hdc, &tm)) sz.cx += tm.tmOverhang;
+    sz.cx += (font_height + 3) / 4;
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = sz.cx;
+    bmi.bmiHeader.biHeight = -sz.cy;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    void* bits = nullptr;
+    HBITMAP hbm = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!hbm) {
+        SelectObject(hdc, old_font); DeleteObject(font); DeleteDC(hdc);
+        return false;
+    }
+    HBITMAP old_bm = (HBITMAP)SelectObject(hdc, hbm);
+    memset(bits, 0, (size_t)sz.cx * sz.cy * 4);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(255, 255, 255));
+    TextOutA(hdc, 0, 0, text.c_str(), (int)text.size());
+    GdiFlush();
+    auto* src = static_cast<uint8_t*>(bits);
+    out.resize((size_t)sz.cx * sz.cy * 4);
+    for (int i = 0; i < sz.cx * sz.cy; ++i) {
+        uint8_t b = src[i * 4 + 0], g = src[i * 4 + 1], r = src[i * 4 + 2];
+        uint8_t alpha = (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
+        out[i * 4 + 0] = cr;
+        out[i * 4 + 1] = cg;
+        out[i * 4 + 2] = cb;
+        out[i * 4 + 3] = alpha;
+    }
+    out_w = sz.cx; out_h = sz.cy;
+    SelectObject(hdc, old_bm);
+    SelectObject(hdc, old_font);
+    DeleteObject(hbm);
+    DeleteObject(font);
+    DeleteDC(hdc);
+    return true;
+}
+
+// Alpha-blend an RGBA glyph buffer onto a destination RGBA buffer at
+// (dx, dy). Source alpha modulates the per-pixel blend.
+inline void blit_rgba_blend(uint8_t* dst, int dw, int dh, int dstride,
+                            const uint8_t* src, int sw, int sh,
+                            int dx, int dy) {
+    int x0 = std::max(0, dx), y0 = std::max(0, dy);
+    int x1 = std::min(dw, dx + sw), y1 = std::min(dh, dy + sh);
+    for (int y = y0; y < y1; ++y) {
+        const uint8_t* srow = src + (y - dy) * sw * 4;
+        uint8_t* drow = dst + y * dstride;
+        for (int x = x0; x < x1; ++x) {
+            const uint8_t* sp = srow + (x - dx) * 4;
+            uint8_t a = sp[3];
+            if (a == 0) continue;
+            uint8_t* dp = drow + x * 4;
+            int inv = 255 - a;
+            dp[0] = (uint8_t)((sp[0] * a + dp[0] * inv) / 255);
+            dp[1] = (uint8_t)((sp[1] * a + dp[1] * inv) / 255);
+            dp[2] = (uint8_t)((sp[2] * a + dp[2] * inv) / 255);
+            dp[3] = 255;
+        }
+    }
+}
+
+} // namespace
+
+void Renderer::begin_annotation() {
+    if (annotator_active_) return;
+    if (last_frame_data_.empty() || last_frame_w_ == 0 || last_frame_h_ == 0) {
+        std::cout << "[Annotate] No frame to annotate yet\n";
+        return;
+    }
+
+    // Capture the same composite take_screenshot() would save, so what
+    // the user marks up matches what they would have got with Ctrl+S.
+    int cap_w = 0, cap_h = 0;
+    std::vector<uint8_t> rgba;
+    if (phone_frame_enabled_ && phone_frame_.is_generated()) {
+        uint8_t* composite = phone_frame_.composite_screenshot(
+            sdl_renderer_,
+            last_frame_data_.data(), last_frame_w_, last_frame_h_, last_frame_stride_,
+            &cap_w, &cap_h);
+        if (!composite) {
+            std::cout << "[Annotate] composite_screenshot returned null\n";
+            return;
+        }
+        rgba.assign(composite, composite + (size_t)cap_w * cap_h * 4);
+        delete[] composite;
+    } else {
+        cap_w = last_frame_w_;
+        cap_h = last_frame_h_;
+        rgba.resize((size_t)cap_w * cap_h * 4);
+        // last_frame_stride_ may include padding; copy row-by-row.
+        for (int y = 0; y < cap_h; ++y) {
+            memcpy(rgba.data() + (size_t)y * cap_w * 4,
+                   last_frame_data_.data() + (size_t)y * last_frame_stride_,
+                   (size_t)cap_w * 4);
+        }
+    }
+
+    // Build SDL texture from the captured RGBA. Kept around for the
+    // duration of the editor session and re-used across frames.
+    if (annotator_bg_tex_) {
+        SDL_DestroyTexture(annotator_bg_tex_);
+        annotator_bg_tex_ = nullptr;
+    }
+    annotator_bg_tex_ = SDL_CreateTexture(sdl_renderer_, SDL_PIXELFORMAT_ABGR8888,
+                                          SDL_TEXTUREACCESS_STATIC, cap_w, cap_h);
+    if (!annotator_bg_tex_) {
+        std::cerr << "[Annotate] SDL_CreateTexture failed: " << SDL_GetError() << "\n";
+        return;
+    }
+    SDL_UpdateTexture(annotator_bg_tex_, nullptr, rgba.data(), cap_w * 4);
+    SDL_SetTextureBlendMode(annotator_bg_tex_, SDL_BLENDMODE_BLEND);
+
+    annotator_bg_orig_ = std::move(rgba);
+    annotator_bg_w_ = cap_w;
+    annotator_bg_h_ = cap_h;
+    annotator_strokes_.clear();
+    annotator_drawing_ = false;
+    annotator_active_ = true;
+    std::cout << "[Annotate] Editor open (" << cap_w << "x" << cap_h << ")\n";
+}
+
+void Renderer::end_annotation() {
+    if (annotator_bg_tex_) {
+        SDL_DestroyTexture(annotator_bg_tex_);
+        annotator_bg_tex_ = nullptr;
+    }
+    // Free per-stroke text textures before dropping the stroke list.
+    for (auto& s : annotator_strokes_) {
+        if (s.text_tex) { SDL_DestroyTexture(s.text_tex); s.text_tex = nullptr; }
+    }
+    if (annotator_text_preview_tex_) {
+        SDL_DestroyTexture(annotator_text_preview_tex_);
+        annotator_text_preview_tex_ = nullptr;
+    }
+    annotator_text_preview_w_ = annotator_text_preview_h_ = 0;
+    annotator_text_preview_cached_.clear();
+    if (annotator_text_input_active_) {
+        SDL_StopTextInput();
+        annotator_text_input_active_ = false;
+    }
+    annotator_text_buf_.clear();
+    annotator_slider_drag_ = false;
+    annotator_bg_orig_.clear();
+    annotator_bg_orig_.shrink_to_fit();
+    annotator_strokes_.clear();
+    annotator_drawing_ = false;
+    annotator_active_ = false;
+    annotator_bg_w_ = annotator_bg_h_ = 0;
+}
+
+void Renderer::bake_pixelate_stroke(AnnoStroke& s) const {
+    int rx = std::min(s.x0, s.x1);
+    int ry = std::min(s.y0, s.y1);
+    int rw = std::abs(s.x1 - s.x0);
+    int rh = std::abs(s.y1 - s.y0);
+    if (rw < k_anno_pix_block || rh < k_anno_pix_block) {
+        // Too small to mosaic meaningfully — collapse to a tiny patch
+        // covering at least one block so the user still gets feedback.
+        rw = std::max(rw, k_anno_pix_block);
+        rh = std::max(rh, k_anno_pix_block);
+    }
+    int cols = (rw + k_anno_pix_block - 1) / k_anno_pix_block;
+    int rows = (rh + k_anno_pix_block - 1) / k_anno_pix_block;
+    s.pix_origin_x = rx;
+    s.pix_origin_y = ry;
+    s.pix_block_size = k_anno_pix_block;
+    s.pix_cols = cols;
+    s.pix_rows = rows;
+    s.pix_blocks.resize((size_t)cols * rows);
+    for (int by = 0; by < rows; ++by) {
+        for (int bx = 0; bx < cols; ++bx) {
+            s.pix_blocks[(size_t)by * cols + bx] = avg_block_rgb(
+                annotator_bg_orig_.data(),
+                annotator_bg_w_, annotator_bg_h_, annotator_bg_w_ * 4,
+                rx + bx * k_anno_pix_block, ry + by * k_anno_pix_block,
+                k_anno_pix_block);
+        }
+    }
+}
+
+void Renderer::rebuild_text_preview() {
+    // Recreate the in-progress preview texture so it tracks the typed
+    // string. Uses the same Win32 helper as every other text label in
+    // this file.
+    if (annotator_text_preview_tex_) {
+        SDL_DestroyTexture(annotator_text_preview_tex_);
+        annotator_text_preview_tex_ = nullptr;
+    }
+    annotator_text_preview_w_ = annotator_text_preview_h_ = 0;
+    annotator_text_preview_cached_ = annotator_text_buf_;
+    if (annotator_text_buf_.empty() || annotator_text_font_px_ <= 0) return;
+    AnnoColor c = k_anno_palette[annotator_color_idx_];
+    int tw = 0, th = 0;
+    annotator_text_preview_tex_ = make_text_texture(
+        sdl_renderer_, annotator_text_buf_, annotator_text_font_px_,
+        c.r, c.g, c.b, &tw, &th);
+    annotator_text_preview_w_ = tw;
+    annotator_text_preview_h_ = th;
+}
+
+void Renderer::commit_text_stroke() {
+    if (!annotator_text_input_active_) return;
+    if (!annotator_text_buf_.empty()) {
+        AnnoStroke s;
+        s.tool = AnnoTool::Text;
+        s.x0 = annotator_text_x_;
+        s.y0 = annotator_text_y_;
+        s.x1 = annotator_text_x_;
+        s.y1 = annotator_text_y_;
+        s.text = annotator_text_buf_;
+        s.font_px = annotator_text_font_px_;
+        s.r = k_anno_palette[annotator_color_idx_].r;
+        s.g = k_anno_palette[annotator_color_idx_].g;
+        s.b = k_anno_palette[annotator_color_idx_].b;
+        // Bake the on-screen texture immediately so the saved PNG and the
+        // editor view come from the same glyph source.
+        int tw = 0, th = 0;
+        s.text_tex = make_text_texture(sdl_renderer_, s.text, s.font_px,
+                                       s.r, s.g, s.b, &tw, &th);
+        s.text_w = tw;
+        s.text_h = th;
+        annotator_strokes_.push_back(std::move(s));
+    }
+    annotator_text_buf_.clear();
+    if (annotator_text_preview_tex_) {
+        SDL_DestroyTexture(annotator_text_preview_tex_);
+        annotator_text_preview_tex_ = nullptr;
+    }
+    annotator_text_preview_w_ = annotator_text_preview_h_ = 0;
+    annotator_text_preview_cached_.clear();
+    SDL_StopTextInput();
+    annotator_text_input_active_ = false;
+}
+
+void Renderer::rasterize_strokes_to(uint8_t* rgba, int w, int h, int stride) const {
+    for (const auto& s : annotator_strokes_) {
+        int thick = std::max(2, s.thickness);
+        switch (s.tool) {
+        case AnnoTool::Arrow: {
+            // Head — isoceles triangle pointing along the stroke. We compute
+            // it first so we know where to stop the shaft.
+            float dx = (float)(s.x1 - s.x0);
+            float dy = (float)(s.y1 - s.y0);
+            float len = std::sqrt(dx * dx + dy * dy);
+            if (len < 1.0f) break;
+            float ux = dx / len, uy = dy / len;
+            float px = -uy, py = ux; // perpendicular
+            int head_len = std::max(thick * 4, 12);
+            int head_w   = std::max(thick * 3, 9);
+            // Shaft as a perpendicular quad so the tail cap is flat/square
+            // instead of the diamond shape produced by stacked H/V lines.
+            float back_x = s.x1 - ux * head_len * 0.85f;
+            float back_y = s.y1 - uy * head_len * 0.85f;
+            float hw = thick * 0.5f;
+            int s0x = (int)std::round(s.x0  + px * hw);
+            int s0y = (int)std::round(s.y0  + py * hw);
+            int s1x = (int)std::round(s.x0  - px * hw);
+            int s1y = (int)std::round(s.y0  - py * hw);
+            int s2x = (int)std::round(back_x - px * hw);
+            int s2y = (int)std::round(back_y - py * hw);
+            int s3x = (int)std::round(back_x + px * hw);
+            int s3y = (int)std::round(back_y + py * hw);
+            fill_triangle_rgba(rgba, w, h, stride,
+                               s0x, s0y, s1x, s1y, s2x, s2y,
+                               s.r, s.g, s.b);
+            fill_triangle_rgba(rgba, w, h, stride,
+                               s0x, s0y, s2x, s2y, s3x, s3y,
+                               s.r, s.g, s.b);
+            int bx0 = (int)(s.x1 - ux * head_len + px * head_w);
+            int by0 = (int)(s.y1 - uy * head_len + py * head_w);
+            int bx1 = (int)(s.x1 - ux * head_len - px * head_w);
+            int by1 = (int)(s.y1 - uy * head_len - py * head_w);
+            fill_triangle_rgba(rgba, w, h, stride,
+                               s.x1, s.y1, bx0, by0, bx1, by1,
+                               s.r, s.g, s.b);
+            break;
+        }
+        case AnnoTool::Rect: {
+            int rx = std::min(s.x0, s.x1), ry = std::min(s.y0, s.y1);
+            int rw = std::abs(s.x1 - s.x0), rh = std::abs(s.y1 - s.y0);
+            rect_outline_rgba(rgba, w, h, stride, rx, ry, rw, rh, thick,
+                              s.r, s.g, s.b);
+            break;
+        }
+        case AnnoTool::Highlight: {
+            int rx = std::min(s.x0, s.x1), ry = std::min(s.y0, s.y1);
+            int rw = std::abs(s.x1 - s.x0), rh = std::abs(s.y1 - s.y0);
+            filled_rect_blend_rgba(rgba, w, h, stride, rx, ry, rw, rh,
+                                   s.r, s.g, s.b, 110);
+            break;
+        }
+        case AnnoTool::Pixelate: {
+            for (int by = 0; by < s.pix_rows; ++by) {
+                for (int bx = 0; bx < s.pix_cols; ++bx) {
+                    uint32_t c = s.pix_blocks[(size_t)by * s.pix_cols + bx];
+                    uint8_t r = (c >> 16) & 0xFF;
+                    uint8_t g = (c >> 8) & 0xFF;
+                    uint8_t b = c & 0xFF;
+                    int rx = s.pix_origin_x + bx * s.pix_block_size;
+                    int ry = s.pix_origin_y + by * s.pix_block_size;
+                    int x0 = std::max(0, rx);
+                    int y0 = std::max(0, ry);
+                    int x1 = std::min(w, rx + s.pix_block_size);
+                    int y1 = std::min(h, ry + s.pix_block_size);
+                    for (int y = y0; y < y1; ++y) {
+                        uint8_t* row = rgba + y * stride;
+                        for (int x = x0; x < x1; ++x) {
+                            uint8_t* p = row + x * 4;
+                            p[0] = r; p[1] = g; p[2] = b; p[3] = 255;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        case AnnoTool::Text: {
+            if (s.text.empty() || s.font_px <= 0) break;
+            std::vector<uint8_t> glyph;
+            int gw = 0, gh = 0;
+            if (make_text_rgba_buffer(s.text, s.font_px, s.r, s.g, s.b,
+                                      glyph, gw, gh)) {
+                blit_rgba_blend(rgba, w, h, stride, glyph.data(), gw, gh,
+                                s.x0, s.y0);
+            }
+            break;
+        }
+        }
+    }
+}
+
+void Renderer::save_annotated() {
+    if (!annotator_active_ || annotator_bg_orig_.empty()) return;
+
+    // Flush any in-progress text so it ends up in the saved image.
+    if (annotator_text_input_active_) commit_text_stroke();
+
+    const bool save = settings_.screenshot_save_to_folder;
+    const bool clip = settings_.screenshot_copy_to_clipboard;
+    if (!save && !clip) {
+        toast_text_ = "Screenshot disabled in Settings";
+        toast_active_ = true;
+        toast_start_ = std::chrono::steady_clock::now();
+        return;
+    }
+
+    // Bake strokes into a fresh copy of the original capture.
+    std::vector<uint8_t> baked = annotator_bg_orig_;
+    rasterize_strokes_to(baked.data(), annotator_bg_w_, annotator_bg_h_,
+                         annotator_bg_w_ * 4);
+
+    bool wrote = true;
+    std::string filename;
+    if (save) {
+        std::filesystem::create_directories(screenshot_dir_);
+        auto now = std::chrono::system_clock::now();
+        auto tt = std::chrono::system_clock::to_time_t(now);
+        struct tm local_tm;
+#ifdef _WIN32
+        localtime_s(&local_tm, &tt);
+#else
+        localtime_r(&tt, &local_tm);
+#endif
+        char timestamp[32];
+        strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &local_tm);
+        filename = screenshot_dir_ + "/annotated_" + timestamp + ".png";
+        wrote = stbi_write_png(filename.c_str(), annotator_bg_w_, annotator_bg_h_,
+                               4, baked.data(), annotator_bg_w_ * 4) != 0;
+    }
+    if (wrote && clip) {
+        copy_to_clipboard(baked.data(), annotator_bg_w_, annotator_bg_h_);
+    }
+    if (wrote) {
+        if      (save && clip) toast_text_ = "Annotated: saved & copied";
+        else if (save)         toast_text_ = "Annotated: saved to Pictures";
+        else                   toast_text_ = "Annotated: copied to clipboard";
+        toast_active_ = true;
+        toast_start_ = std::chrono::steady_clock::now();
+        if (save) std::cout << "[Annotate] Saved: " << filename << "\n";
+    }
+    end_annotation();
+}
+
+void Renderer::draw_annotator() {
+    if (!annotator_active_ || !annotator_bg_tex_) return;
+
+    int win_w = 0, win_h = 0;
+    SDL_GetWindowSize(window_, &win_w, &win_h);
+
+    // Dim backdrop covering the whole window.
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(sdl_renderer_, 0, 0, 0, 235);
+    SDL_Rect full{0, 0, win_w, win_h};
+    SDL_RenderFillRect(sdl_renderer_, &full);
+
+    // Toolbar reserves a strip at the top.
+    int toolbar_h = std::max(44, win_h / 14);
+    int img_top = toolbar_h + 12;
+    int img_bottom_pad = 12;
+    int avail_w = std::max(64, win_w - 24);
+    int avail_h = std::max(64, win_h - img_top - img_bottom_pad);
+    float sx = (float)avail_w / annotator_bg_w_;
+    float sy = (float)avail_h / annotator_bg_h_;
+    float s = std::min(sx, sy);
+    annotator_dst_w_ = (int)(annotator_bg_w_ * s);
+    annotator_dst_h_ = (int)(annotator_bg_h_ * s);
+    annotator_dst_x_ = (win_w - annotator_dst_w_) / 2;
+    annotator_dst_y_ = img_top + (avail_h - annotator_dst_h_) / 2;
+
+    // Background image.
+    SDL_Rect img_dst{annotator_dst_x_, annotator_dst_y_,
+                     annotator_dst_w_, annotator_dst_h_};
+    SDL_RenderCopy(sdl_renderer_, annotator_bg_tex_, nullptr, &img_dst);
+
+    // Map image-space pixel coords onto the displayed rect.
+    auto img_to_screen = [&](int ix, int iy, int& ox, int& oy) {
+        ox = annotator_dst_x_ + (int)(ix * s);
+        oy = annotator_dst_y_ + (int)(iy * s);
+    };
+    // Convert an image-space line width into screen-space pixels.
+    auto img_thick_to_screen = [&](int img_thick) {
+        return std::max(2, (int)std::round(img_thick * s));
+    };
+
+    auto draw_arrow_screen = [&](int x0, int y0, int x1, int y1, int thick,
+                                 uint8_t r, uint8_t g, uint8_t b) {
+        SDL_SetRenderDrawColor(sdl_renderer_, r, g, b, 255);
+        float dx = (float)(x1 - x0), dy = (float)(y1 - y0);
+        float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1.0f) return;
+        float ux = dx / len, uy = dy / len;
+        float px = -uy, py = ux;
+        int head_len = std::max(thick * 4, 12);
+        int head_w   = std::max(thick * 3, 9);
+        // Stop the shaft at the base of the head so the line never pokes
+        // through the tip. Pull back by ~80% of head_len which leaves a
+        // small overlap that hides any rounding gap.
+        float back_x = x1 - ux * head_len * 0.85f;
+        float back_y = y1 - uy * head_len * 0.85f;
+
+        // Generic scanline fill for an arbitrary triangle. Used both for
+        // the shaft (split into two tris) and the arrow head.
+        auto edge = [](float Ax, float Ay, float Bx, float By, float Px, float Py) {
+            return (Bx - Ax) * (Py - Ay) - (By - Ay) * (Px - Ax);
+        };
+        auto fill_tri = [&](float ax, float ay, float bx, float by,
+                            float cx2, float cy2) {
+            int min_x = (int)std::floor(std::min({ax, bx, cx2}));
+            int max_x = (int)std::ceil (std::max({ax, bx, cx2}));
+            int min_y = (int)std::floor(std::min({ay, by, cy2}));
+            int max_y = (int)std::ceil (std::max({ay, by, cy2}));
+            for (int yy = min_y; yy <= max_y; ++yy) {
+                for (int xx = min_x; xx <= max_x; ++xx) {
+                    float w0 = edge(bx, by, cx2, cy2, (float)xx, (float)yy);
+                    float w1 = edge(cx2, cy2, ax, ay,  (float)xx, (float)yy);
+                    float w2 = edge(ax, ay, bx, by,    (float)xx, (float)yy);
+                    if ((w0 >= 0 && w1 >= 0 && w2 >= 0) ||
+                        (w0 <= 0 && w1 <= 0 && w2 <= 0)) {
+                        SDL_RenderDrawPoint(sdl_renderer_, xx, yy);
+                    }
+                }
+            }
+        };
+
+        // Shaft as a perpendicular quad, giving a flat (square) tail cap.
+        float hw = thick * 0.5f;
+        float s0x = x0  + px * hw, s0y = y0  + py * hw;
+        float s1x = x0  - px * hw, s1y = y0  - py * hw;
+        float s2x = back_x - px * hw, s2y = back_y - py * hw;
+        float s3x = back_x + px * hw, s3y = back_y + py * hw;
+        fill_tri(s0x, s0y, s1x, s1y, s2x, s2y);
+        fill_tri(s0x, s0y, s2x, s2y, s3x, s3y);
+
+        // Solid arrow head: filled triangle with apex at the tip and base
+        // perpendicular to the shaft `head_len` behind it.
+        float ax = (float)x1, ay = (float)y1;
+        float bx = x1 - ux * head_len + px * head_w;
+        float by = y1 - uy * head_len + py * head_w;
+        float cx2 = x1 - ux * head_len - px * head_w;
+        float cy2 = y1 - uy * head_len - py * head_w;
+        fill_tri(ax, ay, bx, by, cx2, cy2);
+    };
+
+    auto draw_rect_screen = [&](int x0, int y0, int x1, int y1, int thick,
+                                uint8_t r, uint8_t g, uint8_t b) {
+        int rx = std::min(x0, x1), ry = std::min(y0, y1);
+        int rw = std::abs(x1 - x0), rh = std::abs(y1 - y0);
+        SDL_SetRenderDrawColor(sdl_renderer_, r, g, b, 255);
+        for (int t = 0; t < thick; ++t) {
+            SDL_Rect rr{rx - t / 2, ry - t / 2, rw + t, rh + t};
+            SDL_RenderDrawRect(sdl_renderer_, &rr);
+        }
+    };
+
+    auto draw_highlight_screen = [&](int x0, int y0, int x1, int y1,
+                                     uint8_t r, uint8_t g, uint8_t b) {
+        int rx = std::min(x0, x1), ry = std::min(y0, y1);
+        int rw = std::abs(x1 - x0), rh = std::abs(y1 - y0);
+        SDL_SetRenderDrawColor(sdl_renderer_, r, g, b, 110);
+        SDL_Rect rr{rx, ry, rw, rh};
+        SDL_RenderFillRect(sdl_renderer_, &rr);
+    };
+
+    auto draw_pixelate_screen = [&](const AnnoStroke& st) {
+        for (int by = 0; by < st.pix_rows; ++by) {
+            for (int bx = 0; bx < st.pix_cols; ++bx) {
+                uint32_t c = st.pix_blocks[(size_t)by * st.pix_cols + bx];
+                uint8_t r = (c >> 16) & 0xFF;
+                uint8_t g = (c >> 8) & 0xFF;
+                uint8_t b = c & 0xFF;
+                int ix = st.pix_origin_x + bx * st.pix_block_size;
+                int iy = st.pix_origin_y + by * st.pix_block_size;
+                int sxp, syp;
+                img_to_screen(ix, iy, sxp, syp);
+                int sw = std::max(1, (int)(st.pix_block_size * s + 1));
+                int sh = std::max(1, (int)(st.pix_block_size * s + 1));
+                SDL_Rect rr{sxp, syp, sw, sh};
+                SDL_SetRenderDrawColor(sdl_renderer_, r, g, b, 255);
+                SDL_RenderFillRect(sdl_renderer_, &rr);
+            }
+        }
+    };
+
+    // Replay committed strokes on top of the background.
+    SDL_RenderSetClipRect(sdl_renderer_, &img_dst);
+    for (const auto& st : annotator_strokes_) {
+        int sx0, sy0, sx1, sy1;
+        img_to_screen(st.x0, st.y0, sx0, sy0);
+        img_to_screen(st.x1, st.y1, sx1, sy1);
+        int thk = img_thick_to_screen(st.thickness);
+        switch (st.tool) {
+        case AnnoTool::Arrow:     draw_arrow_screen(sx0, sy0, sx1, sy1, thk, st.r, st.g, st.b); break;
+        case AnnoTool::Rect:      draw_rect_screen(sx0, sy0, sx1, sy1, thk, st.r, st.g, st.b); break;
+        case AnnoTool::Highlight: draw_highlight_screen(sx0, sy0, sx1, sy1, st.r, st.g, st.b); break;
+        case AnnoTool::Pixelate:  draw_pixelate_screen(st); break;
+        case AnnoTool::Text: {
+            if (!st.text_tex) break;
+            // Scale the glyph texture so it grows/shrinks with the editor.
+            int dw = std::max(1, (int)std::round(st.text_w * s));
+            int dh = std::max(1, (int)std::round(st.text_h * s));
+            SDL_Rect td{sx0, sy0, dw, dh};
+            SDL_RenderCopy(sdl_renderer_, st.text_tex, nullptr, &td);
+            break;
+        }
+        }
+    }
+
+    // Live preview of the in-progress stroke.
+    if (annotator_drawing_) {
+        AnnoColor c = k_anno_palette[annotator_color_idx_];
+        int sx0, sy0, sx1, sy1;
+        img_to_screen(annotator_drag_x0_, annotator_drag_y0_, sx0, sy0);
+        img_to_screen(annotator_drag_x1_, annotator_drag_y1_, sx1, sy1);
+        int thk = img_thick_to_screen(annotator_line_width_);
+        switch (annotator_tool_) {
+        case AnnoTool::Arrow:     draw_arrow_screen(sx0, sy0, sx1, sy1, thk, c.r, c.g, c.b); break;
+        case AnnoTool::Rect:      draw_rect_screen(sx0, sy0, sx1, sy1, thk, c.r, c.g, c.b); break;
+        case AnnoTool::Highlight: draw_highlight_screen(sx0, sy0, sx1, sy1, c.r, c.g, c.b); break;
+        case AnnoTool::Pixelate: {
+            // Show a translucent marker rect while dragging — actual mosaic
+            // is computed on commit.
+            int rx = std::min(sx0, sx1), ry = std::min(sy0, sy1);
+            int rw = std::abs(sx1 - sx0), rh = std::abs(sy1 - sy0);
+            SDL_SetRenderDrawColor(sdl_renderer_, 255, 255, 255, 120);
+            SDL_Rect rr{rx, ry, rw, rh};
+            SDL_RenderFillRect(sdl_renderer_, &rr);
+            SDL_SetRenderDrawColor(sdl_renderer_, 255, 255, 255, 220);
+            SDL_RenderDrawRect(sdl_renderer_, &rr);
+            break;
+        }
+        case AnnoTool::Text: break; // Text uses its own preview path below.
+        }
+    }
+
+    // Live preview of the in-progress text stroke (caret + glyphs).
+    if (annotator_text_input_active_) {
+        int sx0, sy0;
+        img_to_screen(annotator_text_x_, annotator_text_y_, sx0, sy0);
+        if (annotator_text_preview_tex_) {
+            int dw = std::max(1, (int)std::round(annotator_text_preview_w_ * s));
+            int dh = std::max(1, (int)std::round(annotator_text_preview_h_ * s));
+            SDL_Rect td{sx0, sy0, dw, dh};
+            SDL_RenderCopy(sdl_renderer_, annotator_text_preview_tex_, nullptr, &td);
+            // Blinking caret after the last glyph.
+            int caret_x = sx0 + dw + 1;
+            int caret_h = dh;
+            uint32_t ms = (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            if ((ms / 500) % 2 == 0) {
+                AnnoColor c = k_anno_palette[annotator_color_idx_];
+                SDL_SetRenderDrawColor(sdl_renderer_, c.r, c.g, c.b, 255);
+                SDL_Rect cr{caret_x, sy0, std::max(1, (int)std::round(s)), caret_h};
+                SDL_RenderFillRect(sdl_renderer_, &cr);
+            }
+        } else {
+            // Empty buffer — just show a caret so the user knows where they are.
+            int caret_h = std::max(8, (int)std::round(annotator_text_font_px_ * s));
+            uint32_t ms = (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            if ((ms / 500) % 2 == 0) {
+                AnnoColor c = k_anno_palette[annotator_color_idx_];
+                SDL_SetRenderDrawColor(sdl_renderer_, c.r, c.g, c.b, 255);
+                SDL_Rect cr{sx0, sy0, std::max(1, (int)std::round(s)), caret_h};
+                SDL_RenderFillRect(sdl_renderer_, &cr);
+            }
+        }
+    }
+    SDL_RenderSetClipRect(sdl_renderer_, nullptr);
+
+    // ---- Toolbar (centered, top of window) ----
+    // Lay out the toolbar with explicit slot counts and shrink everything
+    // proportionally if it would overflow the window. This keeps every
+    // button reachable even on a narrow phone-shaped window.
+    const int n_tools = 5, n_swatches = 5, n_actions = 3;
+    int btn_sz = std::max(24, toolbar_h - 8);
+    int gap = std::max(3, btn_sz / 6);
+    int swatch_sz = std::max(18, btn_sz - 8);
+    int slider_w = btn_sz * 5;
+    auto compute_total = [&]() {
+        return n_tools * btn_sz + (n_tools - 1) * gap + gap * 3
+             + slider_w + gap * 3
+             + n_swatches * swatch_sz + (n_swatches - 1) * gap + gap * 3
+             + n_actions * btn_sz + (n_actions - 1) * gap;
+    };
+    int avail = std::max(64, win_w - 16);
+    int total_w = compute_total();
+    if (total_w > avail) {
+        // Scale all slot sizes down to fit. Recompute gaps from the new
+        // btn_sz so visual proportions stay consistent.
+        float s2 = (float)avail / total_w;
+        btn_sz   = std::max(20, (int)(btn_sz * s2));
+        swatch_sz = std::max(16, (int)(swatch_sz * s2));
+        gap      = std::max(2, (int)(gap * s2));
+        slider_w = std::max(60, (int)(slider_w * s2));
+        total_w = compute_total();
+        // After flooring, may still overflow by a couple px — just clamp.
+        if (total_w > avail) total_w = avail;
+    }
+    int tx = (win_w - total_w) / 2;
+    if (tx < 8) tx = 8;
+    int ty = (toolbar_h - btn_sz) / 2;
+
+    int mx, my;
+    SDL_GetMouseState(&mx, &my);
+    auto in = [&](int x, int y, int w, int h) {
+        return mx >= x && mx < x + w && my >= y && my < y + h;
+    };
+
+    auto draw_tool_btn = [&](BtnRect& slot, AnnoTool tool, const char* glyph_kind) {
+        slot = {tx, ty, btn_sz, btn_sz};
+        bool selected = (annotator_tool_ == tool);
+        bool hov = in(tx, ty, btn_sz, btn_sz);
+        uint8_t bg = selected ? 90 : (hov ? 70 : 45);
+        SDL_SetRenderDrawColor(sdl_renderer_, bg, bg, bg + 8, 235);
+        SDL_Rect br{tx, ty, btn_sz, btn_sz};
+        SDL_RenderFillRect(sdl_renderer_, &br);
+        if (selected) {
+            SDL_SetRenderDrawColor(sdl_renderer_, 200, 200, 220, 255);
+            SDL_RenderDrawRect(sdl_renderer_, &br);
+        }
+        // Tiny glyph for each tool — kept primitive-only so the toolbar
+        // stays readable without bringing in icon assets.
+        int cx = tx + btn_sz / 2, cy = ty + btn_sz / 2;
+        int g = btn_sz / 3;
+        SDL_SetRenderDrawColor(sdl_renderer_, 235, 235, 240, 255);
+        if (std::string(glyph_kind) == "arrow") {
+            SDL_RenderDrawLine(sdl_renderer_, cx - g, cy + g, cx + g, cy - g);
+            SDL_RenderDrawLine(sdl_renderer_, cx + g, cy - g, cx + g - g/2, cy - g);
+            SDL_RenderDrawLine(sdl_renderer_, cx + g, cy - g, cx + g, cy - g + g/2);
+        } else if (std::string(glyph_kind) == "rect") {
+            SDL_Rect r{cx - g, cy - g/2 - 1, g * 2, g + 2};
+            SDL_RenderDrawRect(sdl_renderer_, &r);
+        } else if (std::string(glyph_kind) == "highlight") {
+            SDL_SetRenderDrawColor(sdl_renderer_, 245, 205, 60, 160);
+            SDL_Rect r{cx - g, cy - g/2 - 1, g * 2, g + 2};
+            SDL_RenderFillRect(sdl_renderer_, &r);
+        } else if (std::string(glyph_kind) == "pixelate") {
+            // 2x2 mini mosaic.
+            int q = g;
+            SDL_SetRenderDrawColor(sdl_renderer_, 200, 200, 200, 255);
+            SDL_Rect r0{cx - q, cy - q, q, q};
+            SDL_RenderFillRect(sdl_renderer_, &r0);
+            SDL_SetRenderDrawColor(sdl_renderer_, 130, 130, 130, 255);
+            SDL_Rect r1{cx,     cy - q, q, q};
+            SDL_RenderFillRect(sdl_renderer_, &r1);
+            SDL_SetRenderDrawColor(sdl_renderer_, 160, 160, 160, 255);
+            SDL_Rect r2{cx - q, cy,     q, q};
+            SDL_RenderFillRect(sdl_renderer_, &r2);
+            SDL_SetRenderDrawColor(sdl_renderer_, 100, 100, 100, 255);
+            SDL_Rect r3{cx,     cy,     q, q};
+            SDL_RenderFillRect(sdl_renderer_, &r3);
+        } else if (std::string(glyph_kind) == "text") {
+            // Stylised "T" — top bar + vertical stem.
+            SDL_Rect bar{cx - g, cy - g, g * 2, std::max(2, g / 3)};
+            SDL_RenderFillRect(sdl_renderer_, &bar);
+            SDL_Rect stem{cx - std::max(1, g / 4), cy - g,
+                          std::max(2, g / 2), g * 2};
+            SDL_RenderFillRect(sdl_renderer_, &stem);
+        }
+        tx += btn_sz + gap;
+    };
+    draw_tool_btn(anno_btn_arrow_,     AnnoTool::Arrow,     "arrow");
+    draw_tool_btn(anno_btn_rect_,      AnnoTool::Rect,      "rect");
+    draw_tool_btn(anno_btn_highlight_, AnnoTool::Highlight, "highlight");
+    draw_tool_btn(anno_btn_pixelate_,  AnnoTool::Pixelate,  "pixelate");
+    draw_tool_btn(anno_btn_text_,      AnnoTool::Text,      "text");
+
+    tx += gap * 3;
+
+    // ---- Line-width slider ----
+    // Track range maps to image-space pixels [k_min..k_max]. Affects
+    // Arrow + Rect strokes (and the in-progress preview); Text uses it
+    // as the glyph height.
+    constexpr int k_lw_min = 1, k_lw_max = 32;
+    int track_y = ty + btn_sz / 2;
+    int track_h = std::max(3, btn_sz / 8);
+    SDL_SetRenderDrawColor(sdl_renderer_, 60, 60, 70, 235);
+    SDL_Rect track{tx, track_y - track_h / 2, slider_w, track_h};
+    SDL_RenderFillRect(sdl_renderer_, &track);
+    // Filled portion up to handle.
+    float lw_t = (float)(annotator_line_width_ - k_lw_min) / (k_lw_max - k_lw_min);
+    lw_t = std::clamp(lw_t, 0.0f, 1.0f);
+    int handle_x = tx + (int)(lw_t * slider_w);
+    SDL_SetRenderDrawColor(sdl_renderer_, 120, 160, 220, 255);
+    SDL_Rect filled{tx, track_y - track_h / 2, handle_x - tx, track_h};
+    SDL_RenderFillRect(sdl_renderer_, &filled);
+    // Handle (circle approximated by filled rect — keeps it primitive).
+    int handle_r = std::max(5, btn_sz / 4);
+    SDL_SetRenderDrawColor(sdl_renderer_, 220, 220, 230, 255);
+    SDL_Rect handle{handle_x - handle_r, track_y - handle_r,
+                    handle_r * 2, handle_r * 2};
+    SDL_RenderFillRect(sdl_renderer_, &handle);
+    SDL_SetRenderDrawColor(sdl_renderer_, 40, 40, 50, 255);
+    SDL_RenderDrawRect(sdl_renderer_, &handle);
+    // Numeric value sits to the right of the track for quick feedback.
+    {
+        char val_buf[12];
+        std::snprintf(val_buf, sizeof(val_buf), "%d", annotator_line_width_);
+        int vw = 0, vh = 0;
+        SDL_Texture* vt = make_text_texture(sdl_renderer_, val_buf,
+                                            std::max(10, btn_sz / 2),
+                                            220, 220, 230, &vw, &vh);
+        if (vt) {
+            SDL_Rect vd{tx + slider_w - vw - 4, track_y - vh / 2, vw, vh};
+            SDL_RenderCopy(sdl_renderer_, vt, nullptr, &vd);
+            SDL_DestroyTexture(vt);
+        }
+    }
+    anno_slider_rect_ = {tx, ty, slider_w, btn_sz};
+    tx += slider_w + gap * 3;
+
+    // Colour swatches.
+    int sw_y = ty + (btn_sz - swatch_sz) / 2;
+    for (int i = 0; i < 5; ++i) {
+        anno_swatch_btns_[i] = {tx, sw_y, swatch_sz, swatch_sz};
+        bool selected = (annotator_color_idx_ == i);
+        SDL_SetRenderDrawColor(sdl_renderer_,
+                               k_anno_palette[i].r, k_anno_palette[i].g,
+                               k_anno_palette[i].b, 255);
+        SDL_Rect r{tx, sw_y, swatch_sz, swatch_sz};
+        SDL_RenderFillRect(sdl_renderer_, &r);
+        SDL_SetRenderDrawColor(sdl_renderer_, selected ? 255 : 60,
+                               selected ? 255 : 60, selected ? 255 : 60, 255);
+        SDL_Rect rr{tx - 1, sw_y - 1, swatch_sz + 2, swatch_sz + 2};
+        SDL_RenderDrawRect(sdl_renderer_, &rr);
+        tx += swatch_sz + gap;
+    }
+    tx += gap * 3;
+
+    auto draw_action_btn = [&](BtnRect& slot, const char* glyph_kind,
+                               uint8_t r, uint8_t g, uint8_t b) {
+        slot = {tx, ty, btn_sz, btn_sz};
+        bool hov = in(tx, ty, btn_sz, btn_sz);
+        SDL_SetRenderDrawColor(sdl_renderer_, hov ? 80 : 50, hov ? 80 : 50,
+                               hov ? 90 : 58, 235);
+        SDL_Rect br{tx, ty, btn_sz, btn_sz};
+        SDL_RenderFillRect(sdl_renderer_, &br);
+        int cx = tx + btn_sz / 2, cy = ty + btn_sz / 2;
+        int gg = btn_sz / 3;
+        SDL_SetRenderDrawColor(sdl_renderer_, r, g, b, 255);
+        if (std::string(glyph_kind) == "undo") {
+            // Left-pointing curved-back arrow: head on the left, tail loops
+            // up and over to the right. Mirrored from the previous version
+            // because "undo" reads more naturally as a leftward motion.
+            SDL_RenderDrawLine(sdl_renderer_, cx - gg, cy - gg/2, cx + gg/2, cy - gg/2);
+            SDL_RenderDrawLine(sdl_renderer_, cx + gg/2, cy - gg/2, cx + gg, cy);
+            SDL_RenderDrawLine(sdl_renderer_, cx + gg, cy, cx + gg/2, cy + gg/2);
+            // Arrow head wedge at the left tip.
+            SDL_RenderDrawLine(sdl_renderer_, cx - gg, cy - gg/2, cx - gg + gg/3, cy - gg);
+            SDL_RenderDrawLine(sdl_renderer_, cx - gg, cy - gg/2, cx - gg + gg/3, cy);
+        } else if (std::string(glyph_kind) == "save") {
+            // Checkmark.
+            SDL_RenderDrawLine(sdl_renderer_, cx - gg, cy, cx - gg/3, cy + gg);
+            SDL_RenderDrawLine(sdl_renderer_, cx - gg/3, cy + gg, cx + gg, cy - gg);
+            SDL_RenderDrawLine(sdl_renderer_, cx - gg, cy + 1, cx - gg/3, cy + gg + 1);
+            SDL_RenderDrawLine(sdl_renderer_, cx - gg/3, cy + gg + 1, cx + gg, cy - gg + 1);
+        } else if (std::string(glyph_kind) == "cancel") {
+            SDL_RenderDrawLine(sdl_renderer_, cx - gg, cy - gg, cx + gg, cy + gg);
+            SDL_RenderDrawLine(sdl_renderer_, cx - gg, cy + gg, cx + gg, cy - gg);
+            SDL_RenderDrawLine(sdl_renderer_, cx - gg, cy - gg + 1, cx + gg, cy + gg + 1);
+            SDL_RenderDrawLine(sdl_renderer_, cx - gg, cy + gg - 1, cx + gg, cy - gg - 1);
+        }
+        tx += btn_sz + gap;
+    };
+    draw_action_btn(anno_btn_undo_,   "undo",   220, 220, 220);
+    draw_action_btn(anno_btn_save_,   "save",    90, 220, 110);
+    draw_action_btn(anno_btn_cancel_, "cancel", 235, 110, 110);
+}
+
+bool Renderer::handle_annotator_event(const SDL_Event& ev) {
+    if (!annotator_active_) return false;
+
+    auto screen_to_image = [&](int sx, int sy, int& ix, int& iy) {
+        if (annotator_dst_w_ <= 0 || annotator_dst_h_ <= 0) { ix = iy = 0; return false; }
+        float fx = (float)(sx - annotator_dst_x_) * annotator_bg_w_ / annotator_dst_w_;
+        float fy = (float)(sy - annotator_dst_y_) * annotator_bg_h_ / annotator_dst_h_;
+        ix = (int)std::round(fx);
+        iy = (int)std::round(fy);
+        return ix >= 0 && iy >= 0 && ix < annotator_bg_w_ && iy < annotator_bg_h_;
+    };
+
+    auto in = [](int mx, int my, const BtnRect& r) {
+        return r.w > 0 && mx >= r.x && my >= r.y && mx < r.x + r.w && my < r.y + r.h;
+    };
+
+    constexpr int k_lw_min = 1, k_lw_max = 32;
+    auto slider_value_from_x = [&](int sx) {
+        int rel = std::clamp(sx - anno_slider_rect_.x, 0, anno_slider_rect_.w);
+        float t = (float)rel / std::max(1, anno_slider_rect_.w);
+        return std::clamp((int)std::round(k_lw_min + t * (k_lw_max - k_lw_min)),
+                          k_lw_min, k_lw_max);
+    };
+
+    // ---- Text input mode ----
+    // While the user is typing into a text stroke, most keyboard events
+    // belong to the input rather than to tool shortcuts.
+    if (annotator_text_input_active_) {
+        if (ev.type == SDL_TEXTINPUT) {
+            annotator_text_buf_ += ev.text.text;
+            rebuild_text_preview();
+            return true;
+        }
+        if (ev.type == SDL_KEYDOWN) {
+            SDL_Keycode k = ev.key.keysym.sym;
+            if (k == SDLK_BACKSPACE) {
+                if (!annotator_text_buf_.empty()) {
+                    // Strip one byte; safe for ASCII typing. Multi-byte
+                    // UTF-8 sequences can leave a partial codepoint, but
+                    // the next render call just re-bakes the buffer.
+                    annotator_text_buf_.pop_back();
+                    // Remove any trailing UTF-8 continuation bytes.
+                    while (!annotator_text_buf_.empty() &&
+                           ((uint8_t)annotator_text_buf_.back() & 0xC0) == 0x80) {
+                        annotator_text_buf_.pop_back();
+                    }
+                    rebuild_text_preview();
+                }
+                return true;
+            }
+            if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
+                commit_text_stroke();
+                return true;
+            }
+            if (k == SDLK_ESCAPE) {
+                // Cancel the in-progress text without leaving the editor.
+                annotator_text_buf_.clear();
+                if (annotator_text_preview_tex_) {
+                    SDL_DestroyTexture(annotator_text_preview_tex_);
+                    annotator_text_preview_tex_ = nullptr;
+                }
+                annotator_text_preview_w_ = annotator_text_preview_h_ = 0;
+                annotator_text_preview_cached_.clear();
+                SDL_StopTextInput();
+                annotator_text_input_active_ = false;
+                return true;
+            }
+            // Swallow other keys (no tool shortcuts while typing).
+            return true;
+        }
+        // Mouse handling continues below — clicking the toolbar or
+        // outside the current text commits and starts a new operation.
+    }
+
+    if (ev.type == SDL_KEYDOWN) {
+        SDL_Keymod m = SDL_GetModState();
+        if (ev.key.keysym.sym == SDLK_ESCAPE) {
+            std::cout << "[Annotate] Cancelled\n";
+            end_annotation();
+            return true;
+        }
+        if (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER) {
+            save_annotated();
+            return true;
+        }
+        if ((m & KMOD_CTRL) && ev.key.keysym.sym == SDLK_z) {
+            if (!annotator_strokes_.empty()) {
+                if (annotator_strokes_.back().text_tex) {
+                    SDL_DestroyTexture(annotator_strokes_.back().text_tex);
+                }
+                annotator_strokes_.pop_back();
+            }
+            return true;
+        }
+        // Tool shortcuts.
+        if (ev.key.keysym.sym == SDLK_a) { annotator_tool_ = AnnoTool::Arrow;     return true; }
+        if (ev.key.keysym.sym == SDLK_r) { annotator_tool_ = AnnoTool::Rect;      return true; }
+        if (ev.key.keysym.sym == SDLK_h) { annotator_tool_ = AnnoTool::Highlight; return true; }
+        if (ev.key.keysym.sym == SDLK_p) { annotator_tool_ = AnnoTool::Pixelate;  return true; }
+        if (ev.key.keysym.sym == SDLK_t) { annotator_tool_ = AnnoTool::Text;      return true; }
+        // [/] adjust line width without touching the slider.
+        if (ev.key.keysym.sym == SDLK_LEFTBRACKET) {
+            annotator_line_width_ = std::max(k_lw_min, annotator_line_width_ - 1);
+            return true;
+        }
+        if (ev.key.keysym.sym == SDLK_RIGHTBRACKET) {
+            annotator_line_width_ = std::min(k_lw_max, annotator_line_width_ + 1);
+            return true;
+        }
+        return true; // swallow everything else while modal
+    }
+
+    if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
+        int mx = ev.button.x, my = ev.button.y;
+        // Toolbar hits first.
+        if (in(mx, my, anno_btn_arrow_))     { if (annotator_text_input_active_) commit_text_stroke(); annotator_tool_ = AnnoTool::Arrow;     return true; }
+        if (in(mx, my, anno_btn_rect_))      { if (annotator_text_input_active_) commit_text_stroke(); annotator_tool_ = AnnoTool::Rect;      return true; }
+        if (in(mx, my, anno_btn_highlight_)) { if (annotator_text_input_active_) commit_text_stroke(); annotator_tool_ = AnnoTool::Highlight; return true; }
+        if (in(mx, my, anno_btn_pixelate_))  { if (annotator_text_input_active_) commit_text_stroke(); annotator_tool_ = AnnoTool::Pixelate;  return true; }
+        if (in(mx, my, anno_btn_text_))      { if (annotator_text_input_active_) commit_text_stroke(); annotator_tool_ = AnnoTool::Text;      return true; }
+        // Slider — start a drag and snap the value to the cursor.
+        if (in(mx, my, anno_slider_rect_)) {
+            annotator_slider_drag_ = true;
+            annotator_line_width_ = slider_value_from_x(mx);
+            // Live preview gets re-baked at new size on next render.
+            return true;
+        }
+        for (int i = 0; i < 5; ++i) {
+            if (in(mx, my, anno_swatch_btns_[i])) {
+                annotator_color_idx_ = i;
+                if (annotator_text_input_active_) rebuild_text_preview();
+                return true;
+            }
+        }
+        if (in(mx, my, anno_btn_undo_)) {
+            if (!annotator_strokes_.empty()) {
+                if (annotator_strokes_.back().text_tex) {
+                    SDL_DestroyTexture(annotator_strokes_.back().text_tex);
+                }
+                annotator_strokes_.pop_back();
+            }
+            return true;
+        }
+        if (in(mx, my, anno_btn_save_))   { save_annotated();   return true; }
+        if (in(mx, my, anno_btn_cancel_)) { end_annotation();   return true; }
+
+        // Otherwise click is inside the image area.
+        int ix, iy;
+        if (screen_to_image(mx, my, ix, iy)) {
+            if (annotator_tool_ == AnnoTool::Text) {
+                // Commit any prior in-progress text and start a new one
+                // anchored at the cursor.
+                if (annotator_text_input_active_) commit_text_stroke();
+                annotator_text_input_active_ = true;
+                annotator_text_x_ = ix;
+                annotator_text_y_ = iy;
+                // Map the line-width slider to a glyph height, with a
+                // minimum so even thickness=1 produces legible text.
+                annotator_text_font_px_ = std::max(14, annotator_line_width_ * 6);
+                annotator_text_buf_.clear();
+                rebuild_text_preview();
+                SDL_StartTextInput();
+            } else {
+                if (annotator_text_input_active_) commit_text_stroke();
+                annotator_drawing_ = true;
+                annotator_drag_x0_ = annotator_drag_x1_ = ix;
+                annotator_drag_y0_ = annotator_drag_y1_ = iy;
+            }
+        } else if (annotator_text_input_active_) {
+            // Click outside the image while typing also commits.
+            commit_text_stroke();
+        }
+        return true;
+    }
+
+    if (ev.type == SDL_MOUSEMOTION) {
+        if (annotator_slider_drag_) {
+            annotator_line_width_ = slider_value_from_x(ev.motion.x);
+            return true;
+        }
+        if (annotator_drawing_) {
+            int ix, iy;
+            screen_to_image(ev.motion.x, ev.motion.y, ix, iy);
+            // Allow dragging slightly outside the image — clamp to bounds.
+            ix = std::clamp(ix, 0, annotator_bg_w_ - 1);
+            iy = std::clamp(iy, 0, annotator_bg_h_ - 1);
+            annotator_drag_x1_ = ix;
+            annotator_drag_y1_ = iy;
+            return true;
+        }
+    }
+
+    if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) {
+        if (annotator_slider_drag_) {
+            annotator_slider_drag_ = false;
+            return true;
+        }
+        if (annotator_drawing_) {
+            annotator_drawing_ = false;
+            // Discard zero-length drags so a stray click doesn't litter the
+            // stroke list with invisible entries.
+            if (std::abs(annotator_drag_x1_ - annotator_drag_x0_) < 3 &&
+                std::abs(annotator_drag_y1_ - annotator_drag_y0_) < 3) {
+                return true;
+            }
+            AnnoStroke s;
+            s.tool = annotator_tool_;
+            s.x0 = annotator_drag_x0_; s.y0 = annotator_drag_y0_;
+            s.x1 = annotator_drag_x1_; s.y1 = annotator_drag_y1_;
+            s.r = k_anno_palette[annotator_color_idx_].r;
+            s.g = k_anno_palette[annotator_color_idx_].g;
+            s.b = k_anno_palette[annotator_color_idx_].b;
+            s.thickness = annotator_line_width_;
+            if (s.tool == AnnoTool::Pixelate) bake_pixelate_stroke(s);
+            annotator_strokes_.push_back(std::move(s));
+            return true;
+        }
+    }
+
+    // Keep modal: swallow all other events (mouse wheel, right-click etc).
+    if (ev.type == SDL_MOUSEWHEEL || ev.type == SDL_MOUSEBUTTONDOWN ||
+        ev.type == SDL_MOUSEBUTTONUP) {
+        return true;
+    }
+    return false;
 }
 
 void Renderer::show_toast(const std::string& text, int duration_ms) {
