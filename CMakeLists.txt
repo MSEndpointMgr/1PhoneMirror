@@ -43,6 +43,10 @@ set(MEDIA_SOURCES
     src/media/recorder.cpp
 )
 
+if(WIN32)
+    list(APPEND MEDIA_SOURCES src/media/ocr.cpp)
+endif()
+
 set(NETWORK_SOURCES
     src/network/tcp_server.cpp
     src/network/rtsp_server.cpp
@@ -152,6 +156,10 @@ endif()
 
 if(WIN32)
     target_link_libraries(1PhoneMirror PRIVATE ws2_32 winhttp)
+    # WindowsApp.lib provides the C++/WinRT runtime exports used by the
+    # OCR copy feature (Windows.Media.Ocr). Linked unconditionally on
+    # Windows so it's available even when ENABLE_MIRACAST is OFF.
+    target_link_libraries(1PhoneMirror PRIVATE windowsapp.lib)
     target_compile_definitions(1PhoneMirror PRIVATE NOMINMAX)
     # Embed app manifest for DPI awareness (disable auto-generated manifest to avoid duplicate)
     target_sources(1PhoneMirror PRIVATE resources/openmirror.rc)

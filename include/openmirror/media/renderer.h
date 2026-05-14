@@ -488,6 +488,33 @@ private:
     void commit_text_stroke();
     void rebuild_text_preview();
 
+    // ---- OCR copy (Ctrl+Shift+T) ----
+    // Modal region picker over the same captured composite the annotator
+    // uses. On mouse-up the cropped RGBA is shipped to a worker thread
+    // running Windows.Media.Ocr; the renderer polls `ocr_result_pending_`
+    // each frame, then writes the recognised text to the clipboard.
+    bool ocr_active_ = false;
+    SDL_Texture* ocr_bg_tex_ = nullptr;
+    std::vector<uint8_t> ocr_bg_rgba_;          // packed RGBA, no padding
+    int ocr_bg_w_ = 0, ocr_bg_h_ = 0;
+    int ocr_dst_x_ = 0, ocr_dst_y_ = 0;
+    int ocr_dst_w_ = 0, ocr_dst_h_ = 0;
+    bool ocr_drawing_ = false;
+    int ocr_drag_x0_ = 0, ocr_drag_y0_ = 0;     // image-space
+    int ocr_drag_x1_ = 0, ocr_drag_y1_ = 0;
+    std::atomic<bool> ocr_running_{false};
+    std::mutex ocr_result_mu_;
+    bool ocr_result_pending_ = false;
+    bool ocr_result_ok_ = false;
+    std::string ocr_result_text_;
+    std::string ocr_result_error_;
+    void begin_ocr();
+    void end_ocr();
+    void draw_ocr_overlay();
+    bool handle_ocr_event(const SDL_Event& ev); // returns true if consumed
+    void launch_ocr_job(int ix, int iy, int iw, int ih);
+    void process_ocr_result();
+
     // Android connect panel (in-app, themed to match info panel)
     bool android_panel_visible_ = false;
     bool android_panel_animating_ = false;

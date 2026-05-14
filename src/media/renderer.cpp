@@ -2,6 +2,9 @@
 #include <openmirror/log_buffer.h>
 #include <openmirror/config.h>
 #include <openmirror/network/update_check.h>
+#ifdef _WIN32
+#include <openmirror/media/ocr.h>
+#endif
 #include <algorithm>
 #include <chrono>
 #include <climits>
@@ -812,6 +815,13 @@ void Renderer::run() {
                 if (event.type == SDL_QUIT) { running_.store(false); return; }
                 if (handle_annotator_event(event)) continue;
             }
+#ifdef _WIN32
+            // OCR region picker is modal too.
+            if (ocr_active_) {
+                if (event.type == SDL_QUIT) { running_.store(false); return; }
+                if (handle_ocr_event(event)) continue;
+            }
+#endif
             switch (event.type) {
             case SDL_QUIT:
                 running_.store(false);
@@ -930,6 +940,19 @@ void Renderer::run() {
                     btn_flash_ = true;
                     btn_flash_start_ = std::chrono::steady_clock::now();
                 }
+#ifdef _WIN32
+                // Ctrl+Shift+T: OCR copy. Open the region picker over the
+                // current composite; on mouse-up the cropped pixels go
+                // through Windows.Media.Ocr and the recognised text lands
+                // on the clipboard.
+                if (event.key.keysym.sym == SDLK_t &&
+                    (event.key.keysym.mod & KMOD_CTRL) &&
+                    (event.key.keysym.mod & KMOD_SHIFT)) {
+                    begin_ocr();
+                    btn_flash_ = true;
+                    btn_flash_start_ = std::chrono::steady_clock::now();
+                }
+#endif
                 // Plain (S) without Ctrl toggles the Settings panel.
                 if (event.key.keysym.sym == SDLK_s && !(event.key.keysym.mod & KMOD_CTRL)) {
                     settings_panel_visible_ = !settings_panel_visible_;
@@ -2931,6 +2954,12 @@ void Renderer::render_frame() {
     if (annotator_active_) {
         draw_annotator();
     }
+#ifdef _WIN32
+    if (ocr_active_) {
+        draw_ocr_overlay();
+    }
+    process_ocr_result();
+#endif
 
     SDL_RenderPresent(sdl_renderer_);
 
@@ -7169,5 +7198,301 @@ void Renderer::draw_pin_overlay() {
         SDL_RenderCopy(sdl_renderer_, pin_note_tex_, nullptr, &dst);
     }
 }
+
+#ifdef _WIN32
+// =====================================================================
+// OCR copy (Ctrl+Shift+T)
+// =====================================================================
+//
+// Reuses the annotator's "freeze a composite, dim it, draw on top" idiom
+// but stripped to a single tool: rectangle pick. On mouse-up the cropped
+// RGBA region is shipped to a worker thread (see media/ocr.cpp), which
+// runs Windows.Media.Ocr and writes the joined text back through a
+// mutex-guarded result slot. The render loop polls
+// `process_ocr_result()` each frame to publish to the clipboard.
+
+void Renderer::begin_ocr() {
+    if (ocr_active_ || annotator_active_) return;
+    if (last_frame_data_.empty() || last_frame_w_ == 0 || last_frame_h_ == 0) {
+        toast_text_ = "OCR: no frame yet";
+        toast_start_ = std::chrono::steady_clock::now();
+        return;
+    }
+
+    // Capture the same composite the annotator does so the user picks a
+    // region of exactly what they see (phone frame included when on).
+    int cap_w = 0, cap_h = 0;
+    std::vector<uint8_t> rgba;
+    if (phone_frame_enabled_ && phone_frame_.is_generated()) {
+        uint8_t* composite = phone_frame_.composite_screenshot(
+            sdl_renderer_,
+            last_frame_data_.data(), last_frame_w_, last_frame_h_, last_frame_stride_,
+            &cap_w, &cap_h);
+        if (!composite) {
+            toast_text_ = "OCR: composite failed";
+            toast_start_ = std::chrono::steady_clock::now();
+            return;
+        }
+        rgba.assign(composite, composite + (size_t)cap_w * cap_h * 4);
+        delete[] composite;
+    } else {
+        cap_w = last_frame_w_;
+        cap_h = last_frame_h_;
+        rgba.resize((size_t)cap_w * cap_h * 4);
+        for (int y = 0; y < cap_h; ++y) {
+            memcpy(rgba.data() + (size_t)y * cap_w * 4,
+                   last_frame_data_.data() + (size_t)y * last_frame_stride_,
+                   (size_t)cap_w * 4);
+        }
+    }
+
+    if (ocr_bg_tex_) { SDL_DestroyTexture(ocr_bg_tex_); ocr_bg_tex_ = nullptr; }
+    ocr_bg_tex_ = SDL_CreateTexture(sdl_renderer_, SDL_PIXELFORMAT_ABGR8888,
+                                    SDL_TEXTUREACCESS_STATIC, cap_w, cap_h);
+    if (!ocr_bg_tex_) {
+        std::cerr << "[OCR] SDL_CreateTexture failed: " << SDL_GetError() << "\n";
+        return;
+    }
+    SDL_UpdateTexture(ocr_bg_tex_, nullptr, rgba.data(), cap_w * 4);
+
+    ocr_bg_rgba_ = std::move(rgba);
+    ocr_bg_w_ = cap_w;
+    ocr_bg_h_ = cap_h;
+    ocr_drawing_ = false;
+    ocr_drag_x0_ = ocr_drag_y0_ = ocr_drag_x1_ = ocr_drag_y1_ = 0;
+    ocr_active_ = true;
+    toast_text_ = "OCR: drag a rectangle, Esc to cancel";
+    toast_start_ = std::chrono::steady_clock::now();
+}
+
+void Renderer::end_ocr() {
+    if (ocr_bg_tex_) { SDL_DestroyTexture(ocr_bg_tex_); ocr_bg_tex_ = nullptr; }
+    ocr_bg_rgba_.clear();
+    ocr_bg_w_ = ocr_bg_h_ = 0;
+    ocr_drawing_ = false;
+    ocr_active_ = false;
+}
+
+void Renderer::draw_ocr_overlay() {
+    if (!ocr_active_ || !ocr_bg_tex_) return;
+
+    int win_w = 0, win_h = 0;
+    SDL_GetRendererOutputSize(sdl_renderer_, &win_w, &win_h);
+
+    // Dim backdrop.
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(sdl_renderer_, 0, 0, 0, 200);
+    SDL_Rect full{0, 0, win_w, win_h};
+    SDL_RenderFillRect(sdl_renderer_, &full);
+
+    // Fit the captured composite into the window with a small margin.
+    int margin = 16;
+    int avail_w = std::max(64, win_w - 2 * margin);
+    int avail_h = std::max(64, win_h - 2 * margin);
+    float sx = (float)avail_w / ocr_bg_w_;
+    float sy = (float)avail_h / ocr_bg_h_;
+    float s = std::min(sx, sy);
+    ocr_dst_w_ = (int)(ocr_bg_w_ * s);
+    ocr_dst_h_ = (int)(ocr_bg_h_ * s);
+    ocr_dst_x_ = (win_w - ocr_dst_w_) / 2;
+    ocr_dst_y_ = (win_h - ocr_dst_h_) / 2;
+
+    SDL_Rect img_dst{ocr_dst_x_, ocr_dst_y_, ocr_dst_w_, ocr_dst_h_};
+    SDL_RenderCopy(sdl_renderer_, ocr_bg_tex_, nullptr, &img_dst);
+
+    auto img_to_screen = [&](int ix, int iy, int& ox, int& oy) {
+        ox = ocr_dst_x_ + (int)(ix * s);
+        oy = ocr_dst_y_ + (int)(iy * s);
+    };
+
+    // Selection rect.
+    if (ocr_drawing_) {
+        int x0s, y0s, x1s, y1s;
+        img_to_screen(ocr_drag_x0_, ocr_drag_y0_, x0s, y0s);
+        img_to_screen(ocr_drag_x1_, ocr_drag_y1_, x1s, y1s);
+        int rx = std::min(x0s, x1s), ry = std::min(y0s, y1s);
+        int rw = std::abs(x1s - x0s), rh = std::abs(y1s - y0s);
+
+        // Cut the dimmer out of the selection so the user sees the source
+        // pixels unobstructed inside the rect.
+        SDL_Rect sel{rx, ry, rw, rh};
+        SDL_RenderCopy(sdl_renderer_, ocr_bg_tex_, nullptr, &img_dst);
+        SDL_SetRenderDrawColor(sdl_renderer_, 0, 0, 0, 0);
+        // We can't punch a hole; redraw selected region of the composite
+        // on top of the dimmer instead.
+        // Compute matching source rect in image-space.
+        auto screen_to_img = [&](int xs, int ys, int& ix, int& iy) {
+            ix = (int)((xs - ocr_dst_x_) / s);
+            iy = (int)((ys - ocr_dst_y_) / s);
+        };
+        int isx0, isy0, isx1, isy1;
+        screen_to_img(rx, ry, isx0, isy0);
+        screen_to_img(rx + rw, ry + rh, isx1, isy1);
+        isx0 = std::clamp(isx0, 0, ocr_bg_w_);
+        isy0 = std::clamp(isy0, 0, ocr_bg_h_);
+        isx1 = std::clamp(isx1, 0, ocr_bg_w_);
+        isy1 = std::clamp(isy1, 0, ocr_bg_h_);
+        SDL_Rect src{isx0, isy0, isx1 - isx0, isy1 - isy0};
+        SDL_RenderCopy(sdl_renderer_, ocr_bg_tex_, &src, &sel);
+
+        // Marching-rectangle border (solid 2-px green).
+        SDL_SetRenderDrawColor(sdl_renderer_, 80, 220, 120, 255);
+        for (int t = 0; t < 2; ++t) {
+            SDL_Rect r{rx - t, ry - t, rw + 2 * t, rh + 2 * t};
+            SDL_RenderDrawRect(sdl_renderer_, &r);
+        }
+    }
+
+    // Status hint at the bottom.
+    int fh = std::max(16, win_h / 36);
+    std::string hint;
+    if (ocr_running_.load()) {
+        hint = "OCR: recognizing...";
+    } else if (ocr_drawing_) {
+        hint = "Release to recognize, Esc to cancel";
+    } else {
+        hint = "Click and drag to pick a region (Esc to cancel)";
+    }
+    int tw = 0, th = 0;
+    SDL_Texture* tex = make_text_texture(sdl_renderer_, hint, fh, 230, 230, 230,
+                                         &tw, &th);
+    if (tex) {
+        SDL_Rect bg{(win_w - tw) / 2 - 12, win_h - th - 24, tw + 24, th + 12};
+        SDL_SetRenderDrawColor(sdl_renderer_, 0, 0, 0, 180);
+        SDL_RenderFillRect(sdl_renderer_, &bg);
+        SDL_Rect d{(win_w - tw) / 2, win_h - th - 18, tw, th};
+        SDL_RenderCopy(sdl_renderer_, tex, nullptr, &d);
+        SDL_DestroyTexture(tex);
+    }
+}
+
+bool Renderer::handle_ocr_event(const SDL_Event& ev) {
+    if (!ocr_active_) return false;
+
+    auto screen_to_img = [&](int xs, int ys, int& ix, int& iy) -> bool {
+        if (ocr_dst_w_ <= 0 || ocr_dst_h_ <= 0) return false;
+        float s = (float)ocr_dst_w_ / ocr_bg_w_;
+        ix = (int)((xs - ocr_dst_x_) / s);
+        iy = (int)((ys - ocr_dst_y_) / s);
+        ix = std::clamp(ix, 0, ocr_bg_w_ - 1);
+        iy = std::clamp(iy, 0, ocr_bg_h_ - 1);
+        // Inside the displayed image rect?
+        return xs >= ocr_dst_x_ && xs < ocr_dst_x_ + ocr_dst_w_ &&
+               ys >= ocr_dst_y_ && ys < ocr_dst_y_ + ocr_dst_h_;
+    };
+
+    switch (ev.type) {
+    case SDL_KEYDOWN:
+        if (ev.key.keysym.sym == SDLK_ESCAPE) {
+            // If a job is running we still drop the modal; the worker
+            // thread will publish its result silently or be ignored
+            // depending on whether the user cares. Simpler: just close.
+            end_ocr();
+            return true;
+        }
+        return true; // swallow keys while OCR modal is up
+
+    case SDL_MOUSEBUTTONDOWN:
+        if (ev.button.button == SDL_BUTTON_LEFT && !ocr_running_.load()) {
+            int ix, iy;
+            if (screen_to_img(ev.button.x, ev.button.y, ix, iy)) {
+                ocr_drawing_ = true;
+                ocr_drag_x0_ = ocr_drag_x1_ = ix;
+                ocr_drag_y0_ = ocr_drag_y1_ = iy;
+            }
+        }
+        return true;
+
+    case SDL_MOUSEMOTION:
+        if (ocr_drawing_) {
+            int ix, iy;
+            screen_to_img(ev.motion.x, ev.motion.y, ix, iy);
+            ocr_drag_x1_ = ix;
+            ocr_drag_y1_ = iy;
+        }
+        return true;
+
+    case SDL_MOUSEBUTTONUP:
+        if (ev.button.button == SDL_BUTTON_LEFT && ocr_drawing_) {
+            ocr_drawing_ = false;
+            int ix0 = std::min(ocr_drag_x0_, ocr_drag_x1_);
+            int iy0 = std::min(ocr_drag_y0_, ocr_drag_y1_);
+            int ix1 = std::max(ocr_drag_x0_, ocr_drag_x1_);
+            int iy1 = std::max(ocr_drag_y0_, ocr_drag_y1_);
+            int iw = ix1 - ix0;
+            int ih = iy1 - iy0;
+            if (iw < 8 || ih < 8) {
+                toast_text_ = "OCR: selection too small";
+                toast_start_ = std::chrono::steady_clock::now();
+            } else {
+                launch_ocr_job(ix0, iy0, iw, ih);
+            }
+        }
+        return true;
+
+    case SDL_WINDOWEVENT:
+        return false; // don't swallow window events
+    }
+    return false;
+}
+
+void Renderer::launch_ocr_job(int ix, int iy, int iw, int ih) {
+    if (ocr_running_.exchange(true)) return;
+
+    // Crop into a packed RGBA buffer that the worker owns.
+    std::vector<uint8_t> crop((size_t)iw * ih * 4);
+    for (int y = 0; y < ih; ++y) {
+        memcpy(crop.data() + (size_t)y * iw * 4,
+               ocr_bg_rgba_.data() + ((size_t)(iy + y) * ocr_bg_w_ + ix) * 4,
+               (size_t)iw * 4);
+    }
+
+    int w = iw, h = ih;
+    std::thread([this, buf = std::move(crop), w, h]() mutable {
+        OcrJobResult r = run_ocr_rgba(buf.data(), w, h);
+        {
+            std::lock_guard<std::mutex> lk(ocr_result_mu_);
+            ocr_result_ok_ = r.ok;
+            ocr_result_text_ = std::move(r.text);
+            ocr_result_error_ = std::move(r.error);
+            ocr_result_pending_ = true;
+        }
+        ocr_running_.store(false);
+    }).detach();
+}
+
+void Renderer::process_ocr_result() {
+    bool pending = false;
+    bool ok = false;
+    std::string text, err;
+    {
+        std::lock_guard<std::mutex> lk(ocr_result_mu_);
+        if (!ocr_result_pending_) return;
+        pending = true;
+        ok = ocr_result_ok_;
+        text = std::move(ocr_result_text_);
+        err = std::move(ocr_result_error_);
+        ocr_result_pending_ = false;
+    }
+    if (!pending) return;
+
+    if (ok) {
+        if (text.empty()) {
+            toast_text_ = "OCR: no text detected";
+        } else {
+            SDL_SetClipboardText(text.c_str());
+            // Trim the toast to a reasonable length.
+            int n = (int)text.size();
+            toast_text_ = "OCR: copied " + std::to_string(n) +
+                          " char" + (n == 1 ? "" : "s") + " to clipboard";
+        }
+    } else {
+        toast_text_ = "OCR failed: " + err;
+        std::cerr << "[OCR] " << err << "\n";
+    }
+    toast_start_ = std::chrono::steady_clock::now();
+    end_ocr();
+}
+#endif // _WIN32
 
 } // namespace openmirror::media
