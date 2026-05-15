@@ -65,6 +65,12 @@ The fastest way (Windows 10 / 11):
 winget install MSEndpointMgr.1PhoneMirror
 ```
 
+Already installed? Upgrade to the latest release with:
+
+```powershell
+winget upgrade MSEndpointMgr.1PhoneMirror
+```
+
 Or grab the latest MSI directly from
 [Releases](https://github.com/MSEndpointMgr/1PhoneMirror/releases/latest).
 
