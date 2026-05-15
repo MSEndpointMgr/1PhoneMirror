@@ -2688,11 +2688,14 @@ void Renderer::render_frame() {
                 toast_active_ = false;
             }
         }
-
-        // Persistent "Update available" banner. Draws below the toast pill
-        // when both happen to be visible at the same time.
-        draw_update_banner();
     }
+
+    // Persistent "Update available" banner. Sits at the top of the phone
+    // frame and is independent of the island/bezel mini-button visibility
+    // (the previous placement was inside `if (island_anim_ < 0.5f)`, which
+    // suppressed the banner whenever the menu was open — i.e. the default
+    // first-run state). Draws below the toast pill when both are visible.
+    draw_update_banner();
 
     // Log star — center right bezel
     {
