@@ -110,6 +110,14 @@ private:
     void draw_island();
     void draw_footer(int svx, int svy, int svw, int svh);
     void draw_info_panel();
+    // Returns a "phone-equivalent" reference width for sizing overlay UI
+    // (panels, popup menus, tooltips, swatches, footer/help dialogs) so
+    // they stay compact regardless of source dimensions. When mirroring a
+    // tablet/desktop the screen viewport (svw) is much wider than a phone,
+    // and dividing fonts/buttons by `svw / N` bloats every overlay. This
+    // helper collapses the source to a phone-equivalent width and applies
+    // an absolute cap.
+    int ui_ref_width() const;
     void take_screenshot();
     void open_screenshot_folder();
     // Recording lifecycle helpers (called only from the renderer thread).
@@ -152,6 +160,11 @@ private:
     // Optional fixed-length recording (5/10/15 s). 0 = open-ended.
     int  pending_record_duration_sec_ = 0;
     bool window_shape_set_ = false;
+    // Set when the user picks a different source from the bezel dots so
+    // the next texture-resize event regenerates the phone frame and
+    // resizes the window to match the new source's aspect (otherwise the
+    // canvas-change branch keeps the old frame and letterboxes).
+    bool source_just_switched_ = false;
     int  window_shape_last_lp_w_ = -1; // pixel width of drawer region when last applied
     int  window_shape_last_frame_w_ = -1;
     int  window_shape_last_frame_x_ = -1;

@@ -496,7 +496,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         footer_line1_.push_back(seg(L"1PhoneMirror by ", 120, 120, 120));
         footer_line1_.push_back(seg(L"MSEndpointMgr", 120, 120, 120,
                                      "https://msendpointmgr.com/", "Open MSEndpointMgr"));
-        // Line 2: "(c) 2026 \u266B Simon Skotheimsvik, MVP \u00B7 v0.3.7"
+        // Line 2: "(c) 2026 \u266B Simon Skotheimsvik, MVP \u00B7 v0.3.8"
         footer_line2_.push_back(seg(L"\u00A9 2026 ", 100, 100, 100));
         // Beamed-eighth-notes glyph — render via Segoe UI Symbol so it works
         // on Windows builds where the regular Segoe UI font lacks U+266B.
@@ -514,9 +514,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
                                      "https://buymeacoffee.com/simonskothn",
                                      "Buy me a coffee",
                                      L"Segoe UI Symbol"));
-        // Line 3: " · v0.3.7" — broken onto its own line so the second
+        // Line 3: " · v0.3.8" — broken onto its own line so the second
         // line stays a comfortable width on narrow phone aspects.
-        footer_line3_.push_back(seg(L"v0.3.7", 100, 100, 100,
+        footer_line3_.push_back(seg(L"v0.3.8", 100, 100, 100,
                                      "", "Version history (V)"));
 
         // Mirror the same content for the Info panel, but baked at the
@@ -546,7 +546,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
                                            "https://buymeacoffee.com/simonskothn",
                                            "Buy me a coffee",
                                            L"Segoe UI Symbol"));
-        info_footer_line3_.push_back(iseg(L"v0.3.7", 130, 130, 130,
+        info_footer_line3_.push_back(iseg(L"v0.3.8", 130, 130, 130,
                                            "", "Version history (V)"));
     }
 #endif
@@ -560,7 +560,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
             line.tex = make_text_texture_w(sdl_renderer_, text, font_sz, r, g, b, &line.w, &line.h);
             return line;
         };
-        info_lines_.push_back(make_info(L"1PhoneMirror v0.3.7", 44, 255, 255, 255));
+        info_lines_.push_back(make_info(L"1PhoneMirror v0.3.8", 44, 255, 255, 255));
         info_lines_.push_back(make_info(L"AirPlay (iOS) \u00B7 scrcpy (Android)", 34, 160, 160, 160));
         info_lines_.push_back({nullptr, 0, 0}); // spacer
         info_lines_.push_back(make_info(L"(F) Fullscreen \u00B7 (M) Menu \u00B7 (L) Log \u00B7 (A) Add Android", 30, 130, 130, 130));
@@ -596,6 +596,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
+        version_lines_.push_back(make_ver(L"16.05.2026 \u2013 0.3.8", 34, 200, 200, 255));
+        version_lines_.push_back(make_ver(L"Tuned for larger screens from macOS", 30, 160, 160, 160));
+        version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"15.05.2026 \u2013 0.3.7", 34, 200, 200, 255));
         version_lines_.push_back(make_ver(L"Copy text from the phone screen (Ctrl+Shift+T)", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
@@ -1360,7 +1363,16 @@ void Renderer::run() {
                                         pending_source_name_ = nm;
                                     }
                                 }
-                                if (set_active_source_fn_) set_active_source_fn_(id);
+                                if (set_active_source_fn_) {
+                                    // Flag so the next texture-resize event
+                                    // triggers a phone-frame regenerate +
+                                    // window reshape (otherwise the
+                                    // canvas-change branch would keep the
+                                    // outgoing source's frame and letterbox
+                                    // the new device's video).
+                                    source_just_switched_ = true;
+                                    set_active_source_fn_(id);
+                                }
                                 handled = true;
                                 break;
                             }
@@ -1907,6 +1919,12 @@ void Renderer::render_frame() {
                         }
                     }
                 }
+                // User just clicked a different source dot \u2014 force the
+                // canvas-change branch to be treated as a fresh device so
+                // the phone frame is regenerated and the window is reshaped
+                // for the new aspect ratio (Mac landscape \u2194 iPhone portrait).
+                bool source_switched = source_just_switched_;
+                source_just_switched_ = false;
 
                 if (texture_) SDL_DestroyTexture(texture_);
                 texture_ = SDL_CreateTexture(sdl_renderer_,
@@ -1917,39 +1935,50 @@ void Renderer::render_frame() {
                 std::cout << "[Renderer] Texture resized: " << tex_width_ << "x" << tex_height_
                           << (real_rotation       ? " (rotation)" :
                               first_real_texture  ? " (initial)"  :
+                              source_switched     ? " (source switch)" :
                                                     " (canvas change - keeping frame)")
                           << "\n";
 
-                if (real_rotation || first_real_texture) {
+                if (real_rotation || first_real_texture || source_switched) {
                     window_shape_set_ = false;
                     if (phone_frame_enabled_) {
                         phone_frame_.generate(sdl_renderer_, tex_width_, tex_height_);
-                        // Preserve the user's window placement AND the perceived
-                        // size across portrait <-> landscape rotation: keep the
-                        // SHORT side of the window the same length, then derive
-                        // the long side from the new phone aspect ratio. Without
-                        // this, rotating a 400x800 portrait would jump to
-                        // 1600x800 landscape (short side doubling).
                         int fw = phone_frame_.frame_width();
                         int fh = phone_frame_.frame_height();
                         int cur_w, cur_h;
                         SDL_GetWindowSize(window_, &cur_w, &cur_h);
-                        // Exclude the log drawer (if open) from the comparison
-                        // so a wide log panel doesn't fool us into thinking the
-                        // phone area is huge — otherwise the new window grows
-                        // by log_panel_w on every connect.
                         int cur_log_w = (int)(log_panel_full_w_ * log_panel_anim_);
-                        int phone_w   = std::max(1, cur_w - cur_log_w);
-                        int prev_short = std::min(phone_w, cur_h);
-                        int new_short  = std::min(fw, fh);
-                        if (new_short <= 0) new_short = 1;
-                        float s = (float)prev_short / (float)new_short;
-                        int new_w = std::max(1, (int)std::round(fw * s));
-                        int new_h = std::max(1, (int)std::round(fh * s));
-                        // Re-add the log drawer width so the panel stays visible
-                        // at its current animation state. The render loop will
-                        // also reconcile this on the next frame.
-                        SDL_SetWindowSize(window_, new_w + cur_log_w, new_h);
+
+                        if (first_real_texture || source_switched) {
+                            // Fresh device (first connect or user picked a
+                            // different source) \u2014 use the same display-
+                            // relative sizing as Ctrl+0 so the window fits
+                            // the new source's aspect (e.g. iPhone portrait
+                            // vs Mac landscape) without being squashed.
+                            SDL_DisplayMode dm;
+                            if (SDL_GetCurrentDisplayMode(0, &dm) == 0 && fw > 0 && fh > 0) {
+                                float s = std::min(dm.w * 0.32f / fw,
+                                                   dm.h * 0.65f / fh);
+                                int new_w = std::max(1, (int)std::round(fw * s));
+                                int new_h = std::max(1, (int)std::round(fh * s));
+                                SDL_SetWindowSize(window_, new_w + cur_log_w, new_h);
+                            }
+                        } else {
+                            // Same device rotated \u2014 preserve the user's
+                            // window placement AND the perceived size by
+                            // keeping the SHORT side the same length, then
+                            // derive the long side from the new aspect.
+                            // Without this, rotating a 400x800 portrait
+                            // would jump to 1600x800 landscape.
+                            int phone_w   = std::max(1, cur_w - cur_log_w);
+                            int prev_short = std::min(phone_w, cur_h);
+                            int new_short  = std::min(fw, fh);
+                            if (new_short <= 0) new_short = 1;
+                            float s = (float)prev_short / (float)new_short;
+                            int new_w = std::max(1, (int)std::round(fw * s));
+                            int new_h = std::max(1, (int)std::round(fh * s));
+                            SDL_SetWindowSize(window_, new_w + cur_log_w, new_h);
+                        }
                     }
                 }
                 // Same-orientation resolution change: keep phone_frame_ as-is.
@@ -2414,7 +2443,10 @@ void Renderer::render_frame() {
     {
         float scale = (float)frame_dst_w_ / phone_frame_.frame_width();
         int bezel_top = (int)(phone_frame_.screen_y() * scale);
-        int dot_r = std::max(2, frame_dst_w_ / 200);
+        // Glyph size derived from the phone-equivalent reference width
+        // (capped) so the menu chevron stays compact regardless of source
+        // dimensions — see ui_ref_width() for the rationale.
+        int dot_r = std::max(2, ui_ref_width() / 175);
         int star_cx = frame_dst_x_ + frame_dst_w_ / 2;
         int star_cy = frame_dst_y_ + bezel_top / 2;
         int hit_sz = std::max(16, dot_r * 6);
@@ -2476,9 +2508,8 @@ void Renderer::render_frame() {
         int bezel_top = (int)(phone_frame_.screen_y() * scale_b);
         int svx_b = frame_dst_x_ + (int)(phone_frame_.screen_x() * scale_b);
         int svw_b = (int)(phone_frame_.screen_width() * scale_b);
-        int svh_b = (int)(phone_frame_.screen_height() * scale_b);
         // Mirror the maths inside draw_island() so the X position is identical.
-        int phone_eq_w = std::min(svw_b, svh_b / 2);
+        int phone_eq_w = ui_ref_width();
         int btn_sz_full = std::max(20, phone_eq_w / 14);
         int pad_full = btn_sz_full / 3;
         int gap_full = pad_full / 2 + 2;
@@ -2604,7 +2635,7 @@ void Renderer::render_frame() {
         // bit tighter than the chevrons so the diagonals don't graze the
         // bezel edges (the X reaches the corners of its bounding box, where
         // a chevron only reaches one side).
-        int dot_r_close = std::max(2, frame_dst_w_ / 200);
+        int dot_r_close = std::max(2, ui_ref_width() / 175);
         int xg_sz   = std::max(6, dot_r_close * 4);
         // Also keep the X comfortably inside the mini button — leave at
         // least ~25% padding on every side.
@@ -2701,7 +2732,9 @@ void Renderer::render_frame() {
     {
         float scale = (float)frame_dst_w_ / phone_frame_.frame_width();
         int bezel_right = frame_dst_w_ - (int)((phone_frame_.screen_x() + phone_frame_.screen_width()) * scale);
-        int dot_r = std::max(2, frame_dst_w_ / 200);
+        // Glyph size derived from the phone-equivalent reference width so
+        // the log chevron stays compact on tablet/desktop sources.
+        int dot_r = std::max(2, ui_ref_width() / 175);
         int star_cx = frame_dst_x_ + frame_dst_w_ - bezel_right / 2;
         int star_cy = frame_dst_y_ + frame_dst_h_ / 2;
         int hit_sz = std::max(16, dot_r * 6);
@@ -2760,7 +2793,9 @@ void Renderer::render_frame() {
             float scale = (float)frame_dst_w_ / phone_frame_.frame_width();
             int bezel_bottom = frame_dst_h_ -
                 (int)((phone_frame_.screen_y() + phone_frame_.screen_height()) * scale);
-            int dot_r = std::max(3, frame_dst_w_ / 140);
+            // Source-dot size derived from ui_ref_width() so the picker
+            // stays compact (and dots stay close together) on large sources.
+            int dot_r = std::max(3, ui_ref_width() / 120);
             int spacing = dot_r * 7;
             int total_w = spacing * (int)(sources.size() - 1);
             int start_x = frame_dst_x_ + frame_dst_w_ / 2 - total_w / 2;
@@ -2836,7 +2871,10 @@ void Renderer::render_frame() {
     {
         float scale = (float)frame_dst_w_ / phone_frame_.frame_width();
         int cr = std::max(4, (int)(phone_frame_.corner_radius() * scale));
-        int dot_r = std::max(2, frame_dst_w_ / 200);
+        // Dot size derived from ui_ref_width() so the grip stays the same
+        // visual weight whether mirroring a phone or a tablet/desktop. The
+        // arc itself still follows the phone frame's actual corner radius.
+        int dot_r = std::max(2, ui_ref_width() / 175);
         // Arc center is at bottom-right corner inset by corner radius
         int cx = frame_dst_x_ + frame_dst_w_ - cr;
         int cy = frame_dst_y_ + frame_dst_h_ - cr;
@@ -2945,11 +2983,10 @@ void Renderer::render_frame() {
                 bezel_menu_anim_ = 1.0f;
             }
 
-            // Cap font size in tablet mode so the popup stays the same neat
-            // phone-sized format.
-            int eq_w = phone_frame_.is_tablet()
-                           ? (int)(frame_dst_w_ * 0.62f)
-                           : frame_dst_w_;
+            // Use the shared phone-equivalent UI reference width so the
+            // right-click popup stays the same neat size regardless of
+            // whether the source is a phone, tablet or desktop.
+            int eq_w = ui_ref_width();
             int font_h = std::max(12, eq_w / 36);
             int line_gap = std::max(3, font_h / 4);
             int pad = std::max(8, font_h);
@@ -3160,6 +3197,26 @@ void Renderer::render_frame() {
     }
 }
 
+// Returns a "phone-equivalent" reference width for sizing overlay UI.
+// Panels, popup menus, tooltips, swatches and the connect/help dialogs
+// previously sized everything from `svw` (the on-screen phone screen
+// width). When the user mirrors a tablet or desktop, `svw` becomes huge
+// and every UI element bloats out of proportion. This helper folds the
+// source down to a phone-equivalent width (taking the narrower of the
+// real viewport width and `svh / 2`, which is the natural width of a
+// 2:1 phone aspect) and clamps to an absolute ceiling so overlays stay
+// compact even on very large windows. For phone-shaped sources this
+// returns ~svw and behaviour is unchanged.
+int Renderer::ui_ref_width() const {
+    if (frame_dst_w_ == 0) return 0;
+    float scale = (float)frame_dst_w_ / phone_frame_.frame_width();
+    int svw = (int)(phone_frame_.screen_width()  * scale);
+    int svh = (int)(phone_frame_.screen_height() * scale);
+    int phone_eq = (std::min)(svw, svh / 2);
+    constexpr int kAbsCap = 480;
+    return (std::min)(phone_eq, kAbsCap);
+}
+
 bool Renderer::tooltip_ready(const std::string& key) {
     if (key.empty()) {
         hover_key_.clear();
@@ -3204,7 +3261,7 @@ void Renderer::draw_update_banner() {
     // Render textures lazily at a font size matched to the standalone
     // toast pill so visual weight stays consistent with sibling overlays.
     float scale = (float)frame_dst_w_ / phone_frame_.frame_width();
-    int btn_sz_full = std::max(20, (int)(phone_frame_.screen_width() * scale / 14));
+    int btn_sz_full = std::max(20, ui_ref_width() / 14);
     int fh_text = std::max(28, btn_sz_full * 2);
 
     if (!update_line1_tex_) {
@@ -3377,10 +3434,9 @@ void Renderer::draw_bezel_tooltip(const std::string& text, int anchor_x, int anc
         line2 = text.substr(nl + 1);
     }
 
-    // Cap font size in tablet mode so tooltip stays the same neat size.
-    int eq_w = phone_frame_.is_tablet()
-                   ? (int)(frame_dst_w_ * 0.62f)
-                   : frame_dst_w_;
+    // Use the shared phone-equivalent UI reference width so the tooltip
+    // stays the same neat size regardless of source dimensions.
+    int eq_w = ui_ref_width();
     int target_h = std::max(12, eq_w / 38);
     int target_h2 = std::max(10, (target_h * 4) / 5);
 
@@ -3447,14 +3503,11 @@ void Renderer::draw_island() {
     int svx = frame_dst_x_ + (int)(phone_frame_.screen_x() * scale);
     int svy = frame_dst_y_ + (int)(phone_frame_.screen_y() * scale);
     int svw = (int)(phone_frame_.screen_width() * scale);
-    int svh = (int)(phone_frame_.screen_height() * scale);
 
-    // For tablet aspect ratios the screen is much wider relative to its
-    // height than a phone. Scaling the island off `svw` would make it
-    // huge on iPad. Instead, derive button size from the screen height
-    // (a phone-equivalent width) so the menu stays the same neat size
-    // regardless of source device.
-    int phone_eq_w = (std::min)(svw, svh / 2);
+    // Use the shared phone-equivalent reference (capped) so the island
+    // stays the same neat size regardless of source device — same recipe
+    // applied to the info/version/settings panels and bezel popups.
+    int phone_eq_w = ui_ref_width();
     int btn_sz = std::max(20, phone_eq_w / 14);
     int pad = btn_sz / 3;
     int row_h = btn_sz + pad * 2;
@@ -3897,12 +3950,16 @@ void Renderer::draw_info_panel() {
     int svy = frame_dst_y_ + (int)(phone_frame_.screen_y() * scale);
     int svw = (int)(phone_frame_.screen_width() * scale);
 
-    int pad = std::max(8, svw / 20);
+    // UI dimensions are derived from a phone-equivalent reference width so
+    // the Info panel stays the same neat size whether the source is a
+    // phone, an iPad, or a Mac desktop. Centering still uses svw.
+    int uw = ui_ref_width();
+    int pad = std::max(8, uw / 20);
     int line_gap = std::max(3, pad / 4);
     int spacer_h = std::max(4, pad / 2);
 
     // Scale text to fit panel, never below a readable minimum.
-    float max_text_w = svw * 0.7f;
+    float max_text_w = uw * 0.7f;
     const float min_text_scale = 0.40f;
     float text_scale = 0.5f;
     for (auto& line : info_lines_) {
@@ -3961,11 +4018,11 @@ void Renderer::draw_info_panel() {
 
     total_h += pad - line_gap;
 
-    int panel_w = (int)(svw * 0.80f);
+    int panel_w = (std::min)((int)(svw * 0.80f), (int)(uw * 1.6f));
     int panel_x = svx + (svw - panel_w) / 2;
 
     // Position below island bar
-    int btn_sz = std::max(20, svw / 14);
+    int btn_sz = std::max(20, uw / 14);
     int ipad = btn_sz / 3;
     int island_bottom = svy + ipad + btn_sz + ipad * 2;
     int panel_y_target = island_bottom + pad / 2;
@@ -4246,14 +4303,17 @@ void Renderer::draw_version_panel() {
     int svw = (int)(phone_frame_.screen_width() * scale);
     int svh = (int)(phone_frame_.screen_height() * scale);
 
-    int pad = std::max(8, svw / 20);
+    // UI dimensions are derived from a phone-equivalent reference width so
+    // the Version panel stays compact on tablet/desktop sources.
+    int uw = ui_ref_width();
+    int pad = std::max(8, uw / 20);
     int line_gap = std::max(3, pad / 4);
     int spacer_h = std::max(4, pad / 2);
 
     // Scale text to fit panel, but never shrink below a readable minimum.
     // If a line is still too wide at the minimum scale it will overflow the
     // clip rect (acceptable) — the scrollbar handles vertical overflow.
-    float max_text_w = svw * 0.7f;
+    float max_text_w = uw * 0.7f;
     const float min_text_scale = 0.40f;
     float text_scale = 0.5f;
     for (auto& line : version_lines_) {
@@ -4272,11 +4332,11 @@ void Renderer::draw_version_panel() {
     }
     content_h += pad - line_gap;
 
-    int panel_w = (int)(svw * 0.85f);
+    int panel_w = (std::min)((int)(svw * 0.85f), (int)(uw * 1.6f));
     int panel_x = svx + (svw - panel_w) / 2;
 
     // Position below island bar
-    int btn_sz = std::max(20, svw / 14);
+    int btn_sz = std::max(20, uw / 14);
     int ipad = btn_sz / 3;
     int island_bottom = svy + ipad + btn_sz + ipad * 2;
     int panel_y_target = island_bottom + pad / 2;
@@ -4414,18 +4474,21 @@ void Renderer::draw_settings_panel() {
     int svy = frame_dst_y_ + (int)(phone_frame_.screen_y() * scale);
     int svw = (int)(phone_frame_.screen_width() * scale);
 
-    int pad      = std::max(10, svw / 18);
+    // UI dimensions are derived from a phone-equivalent reference width so
+    // the Settings swatches/labels stay compact on tablet/desktop sources.
+    int uw = ui_ref_width();
+    int pad      = std::max(10, uw / 18);
     int row_gap  = std::max(6,  pad / 2);
-    int title_h  = std::max(14, svw / 22);
-    int label_h  = std::max(11, svw / 30);
-    int swatch   = std::max(22, svw / 14);
+    int title_h  = std::max(14, uw / 22);
+    int label_h  = std::max(11, uw / 30);
+    int swatch   = std::max(22, uw / 14);
     int sw_gap   = std::max(6,  swatch / 4);
 
-    int panel_w = (int)(svw * 0.86f);
+    int panel_w = (std::min)((int)(svw * 0.86f), (int)(uw * 1.6f));
     int panel_x = svx + (svw - panel_w) / 2;
 
     // Bottom of island row
-    int btn_sz = std::max(20, svw / 14);
+    int btn_sz = std::max(20, uw / 14);
     int ipad = btn_sz / 3;
     int island_bottom = svy + ipad + btn_sz + ipad * 2;
     int panel_y_target = island_bottom + pad / 2;
@@ -5143,7 +5206,12 @@ void Renderer::draw_android_panel() {
     int svw = (int)(phone_frame_.screen_width() * scale);
     int svh = (int)(phone_frame_.screen_height() * scale);
 
-    int panel_w = (int)(svw * 0.85f);
+    // Cap panel width using the phone-equivalent reference so the dialog
+    // (and every glyph derived from `panel_w`) stays compact when mirroring
+    // a tablet/desktop source. Same recipe as the info/version/settings
+    // panels — see ui_ref_width().
+    int uw = ui_ref_width();
+    int panel_w = std::min((int)(svw * 0.85f), (int)(uw * 1.6f));
     int pad     = std::max(10, panel_w / 22);
     int label_h = std::max(14, panel_w / 26);
     int field_h = std::max(28, panel_w / 12);
@@ -5571,7 +5639,10 @@ void Renderer::draw_android_help() {
     int svw = (int)(phone_frame_.screen_width() * scale);
     int svh = (int)(phone_frame_.screen_height() * scale);
 
-    int panel_w = (int)(svw * 0.92f);
+    // Cap panel width using ui_ref_width() so the help overlay stays the
+    // same neat size when mirroring a tablet/desktop source.
+    int uw = ui_ref_width();
+    int panel_w = std::min((int)(svw * 0.92f), (int)(uw * 1.6f));
     int pad     = std::max(10, panel_w / 24);
     int title_h = std::max(18, panel_w / 18);
     int line_h  = std::max(13, panel_w / 28);
@@ -6431,24 +6502,31 @@ void Renderer::draw_annotator() {
     int win_w = 0, win_h = 0;
     SDL_GetWindowSize(window_, &win_w, &win_h);
 
-    // Dim backdrop covering the whole window.
+    // Restrict the overlay to the PHONE area only (exclude the log drawer
+    // if it is open) so the dim backdrop, picture and toolbar all stay
+    // within the phone window and the user can still see/use the log on
+    // the right. Same recipe as draw_ocr_overlay().
+    int log_w = (int)(log_panel_full_w_ * log_panel_anim_);
+    int phone_area_w = std::max(64, win_w - log_w);
+
+    // Dim backdrop covering the phone area (the log drawer remains visible).
     SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(sdl_renderer_, 0, 0, 0, 235);
-    SDL_Rect full{0, 0, win_w, win_h};
+    SDL_Rect full{0, 0, phone_area_w, win_h};
     SDL_RenderFillRect(sdl_renderer_, &full);
 
     // Toolbar reserves a strip at the top.
     int toolbar_h = std::max(44, win_h / 14);
     int img_top = toolbar_h + 12;
     int img_bottom_pad = 12;
-    int avail_w = std::max(64, win_w - 24);
+    int avail_w = std::max(64, phone_area_w - 24);
     int avail_h = std::max(64, win_h - img_top - img_bottom_pad);
     float sx = (float)avail_w / annotator_bg_w_;
     float sy = (float)avail_h / annotator_bg_h_;
     float s = std::min(sx, sy);
     annotator_dst_w_ = (int)(annotator_bg_w_ * s);
     annotator_dst_h_ = (int)(annotator_bg_h_ * s);
-    annotator_dst_x_ = (win_w - annotator_dst_w_) / 2;
+    annotator_dst_x_ = (phone_area_w - annotator_dst_w_) / 2;
     annotator_dst_y_ = img_top + (avail_h - annotator_dst_h_) / 2;
 
     // Background image.
@@ -6666,7 +6744,7 @@ void Renderer::draw_annotator() {
              + n_swatches * swatch_sz + (n_swatches - 1) * gap + gap * 3
              + n_actions * btn_sz + (n_actions - 1) * gap;
     };
-    int avail = std::max(64, win_w - 16);
+    int avail = std::max(64, phone_area_w - 16);
     int total_w = compute_total();
     if (total_w > avail) {
         // Scale all slot sizes down to fit. Recompute gaps from the new
@@ -6680,7 +6758,7 @@ void Renderer::draw_annotator() {
         // After flooring, may still overflow by a couple px — just clamp.
         if (total_w > avail) total_w = avail;
     }
-    int tx = (win_w - total_w) / 2;
+    int tx = (phone_area_w - total_w) / 2;
     if (tx < 8) tx = 8;
     int ty = (toolbar_h - btn_sz) / 2;
 

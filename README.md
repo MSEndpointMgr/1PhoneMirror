@@ -131,6 +131,7 @@ button on the menu (or use the Windows file dialog) to open it.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **0.3.8** | 16.05.2026 | Tuned for larger screens from macOS. Compact bezel icons, panels and overlays when mirroring iPad/Mac sources; window now reshapes when switching between connected devices. |
 | **0.3.7** | 15.05.2026 | **OCR text capture** (`Ctrl+Shift+T`): right-click any region of the mirrored phone screen to copy the recognised text straight to the Windows clipboard. Powered by `Windows.Media.Ocr`. |
 | **0.3.6** | 14.05.2026 | **Screenshot annotation** (`Ctrl+Shift+S`): arrow, rectangle, highlight, pixelate and text tools, 5-colour palette, line-width slider, undo, save (PNG + clipboard). |
 | **0.3.5** | 13.05.2026 | Version check and UI tunings. In-app GitHub update check, Info panel "About" section, polished footer typography. |
