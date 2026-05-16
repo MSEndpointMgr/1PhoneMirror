@@ -4511,12 +4511,15 @@ void Renderer::draw_settings_panel() {
 
     int swatches_per_row = 3;
     int swatch_rows = (N_PRESETS + swatches_per_row - 1) / swatches_per_row;
+    int telemetry_sub_h = std::max(10, label_h * 4 / 5);
     int total_h = pad + title_h + row_gap
                 + swatch_rows * (swatch + row_gap)
                 + row_gap + label_h + row_gap            // toggle 1 (save)
                 + label_h + row_gap                       // toggle 2 (clipboard)
                 + label_h + row_gap                       // toggle 3 (computer name)
-                + label_h + row_gap                       // toggle 4 (file log)
+                + (label_h + 2)                           // toggle 4 (telemetry)
+                + 3 * (telemetry_sub_h + 1) + row_gap     // telemetry subtitle (3 lines)
+                + label_h + row_gap                       // toggle 5 (file log)
                 + label_h + row_gap                       // recording format row
                 + pad;
 
@@ -4649,8 +4652,8 @@ void Renderer::draw_settings_panel() {
         int sub_box  = std::max(12, label_h + 2);
         int sub_x    = panel_x + pad + sub_box + std::max(6, sub_box / 3);
         const char* sub_lines[] = {
-            "Random install ID, app version, Windows build",
-            "at startup. No IP, no name, no content.",
+            "Random install ID, app version, Windows build.",
+            "No IP, no name, no content.",
             "Inspires me to prioritize fixes and platforms."
         };
         for (const char* sl : sub_lines) {
