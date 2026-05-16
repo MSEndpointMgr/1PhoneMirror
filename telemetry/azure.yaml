@@ -1,0 +1,14 @@
+name: 1phonemirror-telemetry
+metadata:
+    template: 1phonemirror-telemetry@0.1.0
+
+services:
+    api:
+        project: ./src
+        language: dotnet
+        host: function
+
+infra:
+    provider: bicep
+    path: infra
+    module: main

@@ -1,0 +1,5 @@
+bin/
+obj/
+local.settings.json
+.azure/
+*.user

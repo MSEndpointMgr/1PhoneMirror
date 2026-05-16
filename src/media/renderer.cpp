@@ -514,9 +514,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
                                      "https://buymeacoffee.com/simonskothn",
                                      "Buy me a coffee",
                                      L"Segoe UI Symbol"));
-        // Line 3: " · v0.3.8" — broken onto its own line so the second
+        // Line 3: " · v0.3.9" — broken onto its own line so the second
         // line stays a comfortable width on narrow phone aspects.
-        footer_line3_.push_back(seg(L"v0.3.8", 100, 100, 100,
+        footer_line3_.push_back(seg(L"v0.3.9", 100, 100, 100,
                                      "", "Version history (V)"));
 
         // Mirror the same content for the Info panel, but baked at the
@@ -546,7 +546,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
                                            "https://buymeacoffee.com/simonskothn",
                                            "Buy me a coffee",
                                            L"Segoe UI Symbol"));
-        info_footer_line3_.push_back(iseg(L"v0.3.8", 130, 130, 130,
+        info_footer_line3_.push_back(iseg(L"v0.3.9", 130, 130, 130,
                                            "", "Version history (V)"));
     }
 #endif
@@ -560,7 +560,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
             line.tex = make_text_texture_w(sdl_renderer_, text, font_sz, r, g, b, &line.w, &line.h);
             return line;
         };
-        info_lines_.push_back(make_info(L"1PhoneMirror v0.3.8", 44, 255, 255, 255));
+        info_lines_.push_back(make_info(L"1PhoneMirror v0.3.9", 44, 255, 255, 255));
         info_lines_.push_back(make_info(L"AirPlay (iOS) \u00B7 scrcpy (Android)", 34, 160, 160, 160));
         info_lines_.push_back({nullptr, 0, 0}); // spacer
         info_lines_.push_back(make_info(L"(F) Fullscreen \u00B7 (M) Menu \u00B7 (L) Log \u00B7 (A) Add Android", 30, 130, 130, 130));
@@ -596,6 +596,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
+        version_lines_.push_back(make_ver(L"17.05.2026 \u2013 0.3.9", 34, 200, 200, 255));
+        version_lines_.push_back(make_ver(L"Small telemetry in settings", 30, 160, 160, 160));
+        version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"16.05.2026 \u2013 0.3.8", 34, 200, 200, 255));
         version_lines_.push_back(make_ver(L"Tuned for larger screens from macOS", 30, 160, 160, 160));
         version_lines_.push_back({nullptr, 0, 0});
@@ -1582,6 +1585,11 @@ void Renderer::run() {
                             if (in_rect(mx, my, settings_toggle_compname_btn_.x, settings_toggle_compname_btn_.y,
                                         settings_toggle_compname_btn_.w, settings_toggle_compname_btn_.h)) {
                                 settings_.use_computer_name = !settings_.use_computer_name;
+                                settings_.save();
+                            }
+                            if (in_rect(mx, my, settings_toggle_telemetry_btn_.x, settings_toggle_telemetry_btn_.y,
+                                        settings_toggle_telemetry_btn_.w, settings_toggle_telemetry_btn_.h)) {
+                                settings_.telemetry_enabled = !settings_.telemetry_enabled;
                                 settings_.save();
                             }
                             if (in_rect(mx, my, settings_toggle_log_btn_.x, settings_toggle_log_btn_.y,
@@ -4506,12 +4514,15 @@ void Renderer::draw_settings_panel() {
 
     int swatches_per_row = 3;
     int swatch_rows = (N_PRESETS + swatches_per_row - 1) / swatches_per_row;
+    int telemetry_sub_h = std::max(10, label_h * 4 / 5);
     int total_h = pad + title_h + row_gap
                 + swatch_rows * (swatch + row_gap)
                 + row_gap + label_h + row_gap            // toggle 1 (save)
                 + label_h + row_gap                       // toggle 2 (clipboard)
                 + label_h + row_gap                       // toggle 3 (computer name)
-                + label_h + row_gap                       // toggle 4 (file log)
+                + (label_h + 2)                           // toggle 4 (telemetry)
+                + 3 * (telemetry_sub_h + 1) + row_gap     // telemetry subtitle (3 lines)
+                + label_h + row_gap                       // toggle 5 (file log)
                 + label_h + row_gap                       // recording format row
                 + pad;
 
@@ -4633,6 +4644,27 @@ void Renderer::draw_settings_panel() {
         "Identify as computer name (restart required)",
         settings_.use_computer_name, cy);
     cy += label_h + row_gap;
+    settings_toggle_telemetry_btn_ = draw_toggle(
+        "Send anonymous usage ping (recommended)",
+        settings_.telemetry_enabled, cy);
+    cy += label_h + 2;
+    // Subtitle: explain what is collected and why. Always-visible (no hover
+    // tooltips in SDL); rendered dim/smaller so it doesn't crowd the row.
+    {
+        int sub_h    = std::max(10, label_h * 4 / 5);
+        int sub_box  = std::max(12, label_h + 2);
+        int sub_x    = panel_x + pad + sub_box + std::max(6, sub_box / 3);
+        const char* sub_lines[] = {
+            "Random install ID, app version, Windows build.",
+            "No IP, no name, no content.",
+            "Inspires me to prioritize fixes and platforms."
+        };
+        for (const char* sl : sub_lines) {
+            draw_label(sl, sub_h, sub_x, cy, 150, 150, 155, false);
+            cy += sub_h + 1;
+        }
+    }
+    cy += row_gap;
     settings_toggle_log_btn_ = draw_toggle(
         "Save log file to screenshots folder (this session)",
         log_to_file_session_, cy);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(1PhoneMirror VERSION 0.3.8 LANGUAGES C CXX)
+project(1PhoneMirror VERSION 0.3.9 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -51,6 +51,7 @@ set(NETWORK_SOURCES
     src/network/tcp_server.cpp
     src/network/rtsp_server.cpp
     src/network/update_check.cpp
+    src/network/telemetry.cpp
 )
 
 set(CORE_SOURCES
