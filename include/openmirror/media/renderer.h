@@ -360,6 +360,7 @@ private:
     BtnRect settings_toggle_save_btn_;
     BtnRect settings_toggle_clip_btn_;
     BtnRect settings_toggle_compname_btn_;
+    BtnRect settings_toggle_telemetry_btn_;
     // Session-only toggle: when on, std::cout is mirrored to
     // <screenshot_dir>/1PhoneMirror.log. Reset to false on every launch
     // (intentionally NOT persisted to settings.ini).

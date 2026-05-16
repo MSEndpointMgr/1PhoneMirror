@@ -61,6 +61,7 @@ Settings Settings::load() {
             else if (k == "screenshot_save_to_folder")   s.screenshot_save_to_folder   = (v == "1" || v == "true");
             else if (k == "screenshot_copy_to_clipboard") s.screenshot_copy_to_clipboard = (v == "1" || v == "true");
             else if (k == "use_computer_name")            s.use_computer_name            = (v == "1" || v == "true");
+            else if (k == "telemetry_enabled")            s.telemetry_enabled            = (v == "1" || v == "true");
             else if (k == "record_format")                s.record_format                = std::clamp(std::stoi(v), 0, 1);
             else if (k == "record_max_duration_sec")      s.record_max_duration_sec      = std::max(0, std::stoi(v));
             else if (k == "record_fps_mp4")               s.record_fps_mp4               = std::clamp(std::stoi(v), 5, 60);
@@ -80,6 +81,7 @@ bool Settings::save() const {
     f << "screenshot_save_to_folder="   << (screenshot_save_to_folder   ? "1" : "0") << "\n";
     f << "screenshot_copy_to_clipboard=" << (screenshot_copy_to_clipboard ? "1" : "0") << "\n";
     f << "use_computer_name="           << (use_computer_name           ? "1" : "0") << "\n";
+    f << "telemetry_enabled="           << (telemetry_enabled           ? "1" : "0") << "\n";
     f << "record_format="               << record_format << "\n";
     f << "record_max_duration_sec="     << record_max_duration_sec << "\n";
     f << "record_fps_mp4="              << record_fps_mp4 << "\n";

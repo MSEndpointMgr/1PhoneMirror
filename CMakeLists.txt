@@ -51,6 +51,7 @@ set(NETWORK_SOURCES
     src/network/tcp_server.cpp
     src/network/rtsp_server.cpp
     src/network/update_check.cpp
+    src/network/telemetry.cpp
 )
 
 set(CORE_SOURCES

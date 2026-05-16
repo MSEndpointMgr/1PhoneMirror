@@ -1,10 +1,13 @@
 #include <openmirror/app.h>
 #include <openmirror/config.h>
+#include <openmirror/settings.h>
+#include <openmirror/network/telemetry.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <thread>
 
 #if defined(_WIN32)
@@ -523,6 +526,17 @@ bool App::init(const Config& config) {
     // a newer version exists or (manually invoked) when explicitly asked.
     // Network failures are swallowed silently per product spec.
     renderer_.check_for_update_async(false);
+
+    // Opt-in anonymous launch ping. No-op unless the user has enabled
+    // telemetry in the Settings panel. Fire-and-forget; never blocks startup.
+    {
+        auto s = openmirror::Settings::load();
+        std::ostringstream v;
+        v << OPENMIRROR_VERSION_MAJOR << '.'
+          << OPENMIRROR_VERSION_MINOR << '.'
+          << OPENMIRROR_VERSION_PATCH;
+        openmirror::network::send_launch_ping_async(v.str(), s.telemetry_enabled);
+    }
 
     running_.store(true);
     return true;

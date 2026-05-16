@@ -30,6 +30,12 @@ struct Settings {
     // on the same network. Applied at next launch.
     bool use_computer_name = false;
 
+    // Opt-in anonymous launch ping. When true, the app POSTs a one-shot
+    // {install_id, version, os_build} payload to the telemetry endpoint on
+    // each launch. No IP, hostname, username, MAC, or screen contents are
+    // sent. Defaults to false; user enables it from the Settings panel.
+    bool telemetry_enabled = false;
+
     // Returns the path to the settings file (creates the directory if needed).
     static std::string file_path();
 

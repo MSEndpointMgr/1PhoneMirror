@@ -1584,6 +1584,11 @@ void Renderer::run() {
                                 settings_.use_computer_name = !settings_.use_computer_name;
                                 settings_.save();
                             }
+                            if (in_rect(mx, my, settings_toggle_telemetry_btn_.x, settings_toggle_telemetry_btn_.y,
+                                        settings_toggle_telemetry_btn_.w, settings_toggle_telemetry_btn_.h)) {
+                                settings_.telemetry_enabled = !settings_.telemetry_enabled;
+                                settings_.save();
+                            }
                             if (in_rect(mx, my, settings_toggle_log_btn_.x, settings_toggle_log_btn_.y,
                                         settings_toggle_log_btn_.w, settings_toggle_log_btn_.h)) {
                                 log_to_file_session_ = !log_to_file_session_;
@@ -4632,6 +4637,10 @@ void Renderer::draw_settings_panel() {
     settings_toggle_compname_btn_ = draw_toggle(
         "Identify as computer name (restart required)",
         settings_.use_computer_name, cy);
+    cy += label_h + row_gap;
+    settings_toggle_telemetry_btn_ = draw_toggle(
+        "Send anonymous launch ping (helps the project)",
+        settings_.telemetry_enabled, cy);
     cy += label_h + row_gap;
     settings_toggle_log_btn_ = draw_toggle(
         "Save log file to screenshots folder (this session)",
