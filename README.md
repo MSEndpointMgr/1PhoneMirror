@@ -15,6 +15,8 @@ menu to disconnect.
 
 > Like the project? [Buy me a coffee ☕](https://buymeacoffee.com/simonskothn) — every tip helps keep development going.
 
+> 📖 Read the announcement on MSEndpointMgr: [1PhoneMirror – Free screen mirroring tool for Intune admins](https://msendpointmgr.com/2026/05/18/1phonemirror-free-screen-mirroring-tool-for-intune-admin/)
+
 ## Why 1PhoneMirror exists
 
 I build documentation and deliver training on managing Android and iOS
