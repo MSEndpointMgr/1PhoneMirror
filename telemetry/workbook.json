@@ -127,11 +127,12 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "customEvents | where name == 'Launch' | summarize Launches = count(), Installs = dcount(tostring(customDimensions.install_id)) by Version = tostring(customDimensions.version) | order by Version desc",
+        "query": "customEvents | where name == 'Launch' | summarize Launches = count(), Installs = dcount(tostring(customDimensions.install_id)) by Version = tostring(customDimensions.version) | order by Version asc",
         "size": 1,
         "title": "Launches by app version",
         "timeContextFromParameter": "TimeRange",
-        "visualization": "barchart"
+        "visualization": "categoricalbar",
+        "chartSettings": { "xAxis": "Version", "yAxis": ["Launches"], "group": null, "createOtherGroup": null, "showLegend": true }
       },
       "name": "launch-by-version"
     },
@@ -139,9 +140,9 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "customEvents | where name == 'Launch' | summarize Installs = dcount(tostring(customDimensions.install_id)) by Version = tostring(customDimensions.version), bin(timestamp, totimespan('{Bin}')) | render timechart",
+        "query": "customEvents | where name == 'Launch' | summarize Launches = count() by Version = tostring(customDimensions.version), bin(timestamp, totimespan('{Bin}')) | render timechart",
         "size": 1,
-        "title": "Version adoption over time (distinct installs)",
+        "title": "Launches per version over time",
         "timeContextFromParameter": "TimeRange",
         "visualization": "timechart"
       },
@@ -151,9 +152,9 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "customEvents | where name == 'Launch' | summarize Installs = dcount(tostring(customDimensions.install_id)), Launches = count() by OsBuild = tostring(customDimensions.os_build) | order by Installs desc | take 20",
+        "query": "customEvents | where name == 'Launch' | summarize Launches = count(), Installs = dcount(tostring(customDimensions.install_id)) by OsBuild = tostring(customDimensions.os_build) | order by Launches desc | take 20",
         "size": 1,
-        "title": "Windows build distribution (top 20)",
+        "title": "Windows build distribution (top 20, by launches)",
         "timeContextFromParameter": "TimeRange",
         "visualization": "table"
       },
