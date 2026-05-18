@@ -122,7 +122,11 @@ button on the menu (or use the Windows file dialog) to open it.
 | `V` | Toggle version history |
 | `S` | Toggle settings panel (bezel colour, screenshots, recording format) |
 | `Ctrl+S` | Screenshot — save to Pictures folder and/or clipboard (per Settings) |
+| `Ctrl+Shift+S` | Screenshot with annotation tools |
+| `Ctrl+Shift+T` | OCR — copy text from a region of the phone screen |
 | `Ctrl+R` | Start / stop screen recording (MP4 or GIF, per Settings) |
+| `Ctrl+0` | Reset window to default size |
+| `Ctrl+1` … `Ctrl+9` | Switch to device 1 … 9 in the bottom-bezel picker |
 | `Ctrl+C` | (Log viewer) Copy entire log to clipboard |
 | `Ctrl+X` | (Log viewer) Clear log |
 | `Esc` | Close panel / quit |
@@ -131,6 +135,7 @@ button on the menu (or use the Windows file dialog) to open it.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **0.4.0** | 18.05.2026 | **Multi-device keyboard switcher** (`Ctrl+1`…`Ctrl+9`) jumps between connected phones in the bottom-bezel picker. New **Always keep window on top** setting. AirPlay sources now label as **Apple 1/2/…** instead of *Device 1/2/…*. Tooltip shows the shortcut. |
 | **0.3.9** | 17.05.2026 | Small telemetry in settings. |
 | **0.3.8** | 16.05.2026 | Tuned for larger screens from macOS. Compact bezel icons, panels and overlays when mirroring iPad/Mac sources; window now reshapes when switching between connected devices. |
 | **0.3.7** | 15.05.2026 | **OCR text capture** (`Ctrl+Shift+T`): right-click any region of the mirrored phone screen to copy the recognised text straight to the Windows clipboard. Powered by `Windows.Media.Ocr`. |
