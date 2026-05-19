@@ -17,8 +17,6 @@ menu to disconnect.
 
 > 📖 Read the announcement on MSEndpointMgr: [1PhoneMirror – Free screen mirroring tool for Intune admins](https://msendpointmgr.com/2026/05/18/1phonemirror-free-screen-mirroring-tool-for-intune-admin/)
 
-> 🔏 Free code signing on Windows provided by [SignPath.io](https://signpath.io), certificate by the [SignPath Foundation](https://signpath.org). See the [signing policy](.signpath/signing-policy.md) and [GOVERNANCE.md](GOVERNANCE.md).
-
 ## Why 1PhoneMirror exists
 
 I build documentation and deliver training on managing Android and iOS
@@ -214,6 +212,31 @@ demos, consider tipping a coffee — it directly funds new features and
 keeps the project free for everyone.
 
 [![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/simonskothn)
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/),
+certificate by the [SignPath Foundation](https://signpath.org/).
+
+**Team roles**
+
+| Role                              | Members                                                                                       |
+|-----------------------------------|------------------------------------------------------------------------------------------------|
+| Committers and reviewers          | [Simon Skotheimsvik](https://github.com/SimonSkotheimsvik) (sole maintainer at this time)      |
+| Approvers (sign-off on releases)  | [Simon Skotheimsvik](https://github.com/SimonSkotheimsvik) (sole approver — see [GOVERNANCE.md](GOVERNANCE.md)) |
+
+**Privacy policy**
+
+1PhoneMirror sends an anonymous launch ping to a maintainer-operated
+endpoint by default and checks the GitHub Releases API for updates.
+Full details — exactly what is sent, where, and how to opt out — are
+documented in [PRIVACY.md](PRIVACY.md).
+
+**Detailed signing policy**
+
+See [`.signpath/signing-policy.md`](.signpath/signing-policy.md) for
+the two configured signing policies (`release`, `test`), submitter
+rules, and the approver checklist used for every signing request.
 
 ## License
 

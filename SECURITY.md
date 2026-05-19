@@ -72,3 +72,9 @@ Out of scope (but still appreciated as bug reports, not security reports):
   SDL2, OpenSSL, scrcpy-server, adb) — please report those upstream
   first; we will rebuild against fixed versions.
 - Issues that require an already-compromised local Windows account.
+
+## Privacy
+
+For details on what data the application collects (an opt-out launch
+ping plus an update check) and how to disable it, see
+[PRIVACY.md](PRIVACY.md).
