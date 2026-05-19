@@ -1,6 +1,6 @@
-#include <openmirror/airplay/airplay_server.h>
-#include <openmirror/airplay/bplist.h>
-#include <openmirror/config.h>
+#include <opm/airplay/airplay_server.h>
+#include <opm/airplay/bplist.h>
+#include <opm/config.h>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -20,7 +20,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 }
 
-namespace openmirror::airplay {
+namespace opm::airplay {
 
 // ---- Multi-source helpers ------------------------------------------------
 
@@ -1410,4 +1410,4 @@ stream_end:
     mirror_server.stop();
 }
 
-} // namespace openmirror::airplay
+} // namespace opm::airplay

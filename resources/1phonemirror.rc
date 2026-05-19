@@ -2,7 +2,7 @@
 #include <windows.h>
 
 // App icon (ID 101)
-101 ICON "openmirror.ico"
+101 ICON "1phonemirror.ico"
 
 // DPI awareness manifest
-1 RT_MANIFEST "openmirror.manifest"
+1 RT_MANIFEST "1phonemirror.manifest"

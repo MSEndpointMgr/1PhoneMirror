@@ -23,8 +23,8 @@
 #pragma comment(lib, "ws2_32.lib")
 #endif
 
-#include <openmirror/miracast/miracast_receiver.h>
-#include <openmirror/network/tcp_server.h>
+#include <opm/miracast/miracast_receiver.h>
+#include <opm/network/tcp_server.h>
 #include <iostream>
 #include <string>
 #include <sstream>
@@ -60,9 +60,9 @@ namespace WNS   = winrt::Windows::Networking::Sockets;
 namespace WSS   = winrt::Windows::Storage::Streams;
 namespace WF    = winrt::Windows::Foundation;
 
-namespace openmirror::miracast {
+namespace opm::miracast {
 
-using openmirror::network::TcpServer;
+using opm::network::TcpServer;
 
 // ============================================================================
 // WFD Capability Strings
@@ -967,6 +967,6 @@ void MiracastReceiver::stop() {
     std::cout << "[Miracast] Receiver stopped\n";
 }
 
-} // namespace openmirror::miracast
+} // namespace opm::miracast
 
 #endif // ENABLE_MIRACAST

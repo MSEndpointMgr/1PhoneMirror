@@ -22,7 +22,7 @@ using socket_t = int;
 constexpr socket_t INVALID_SOCK = -1;
 #endif
 
-namespace openmirror::network {
+namespace opm::network {
 
 // Callback when a client connects — receives client socket
 using OnClientConnect = std::function<void(socket_t client_sock, const std::string& client_addr)>;
@@ -67,4 +67,4 @@ private:
     std::vector<std::unique_ptr<ClientCtx>> clients_;
 };
 
-} // namespace openmirror::network
+} // namespace opm::network

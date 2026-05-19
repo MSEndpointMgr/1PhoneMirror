@@ -8,7 +8,7 @@
 //
 // No compile-time SDK dependency in either case.
 
-#include <openmirror/airplay/mdns_service.h>
+#include <opm/airplay/mdns_service.h>
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -65,7 +65,7 @@ using FnDNSServiceRegister = DNSServiceErrorType(*)(
 
 using FnDNSServiceRefDeallocate = void(*)(DNSServiceRef);
 
-namespace openmirror::airplay {
+namespace opm::airplay {
 
 // ---- Shared helpers ----
 
@@ -675,4 +675,4 @@ void MdnsService::unregister() {
     impl_->backend = Impl::Backend::None;
 }
 
-} // namespace openmirror::airplay
+} // namespace opm::airplay

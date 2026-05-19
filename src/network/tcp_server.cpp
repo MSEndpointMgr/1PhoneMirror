@@ -1,11 +1,11 @@
-#include <openmirror/network/tcp_server.h>
+#include <opm/network/tcp_server.h>
 #include <iostream>
 
 #ifdef _WIN32
 #pragma comment(lib, "ws2_32.lib")
 #endif
 
-namespace openmirror::network {
+namespace opm::network {
 
 TcpServer::TcpServer() = default;
 
@@ -237,4 +237,4 @@ bool TcpServer::send_string(socket_t sock, const std::string& str) {
                     static_cast<int>(str.size()));
 }
 
-} // namespace openmirror::network
+} // namespace opm::network

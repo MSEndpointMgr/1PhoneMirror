@@ -1,4 +1,4 @@
-#include <openmirror/settings.h>
+#include <opm/settings.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -10,7 +10,7 @@
 #include <shlobj.h>
 #endif
 
-namespace openmirror {
+namespace opm {
 
 static std::string settings_dir() {
 #ifdef _WIN32
@@ -94,4 +94,4 @@ bool Settings::save() const {
     return true;
 }
 
-} // namespace openmirror
+} // namespace opm

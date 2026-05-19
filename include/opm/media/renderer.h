@@ -1,9 +1,9 @@
 #pragma once
 
-#include <openmirror/media/decoder.h>
-#include <openmirror/media/phone_frame.h>
-#include <openmirror/media/recorder.h>
-#include <openmirror/settings.h>
+#include <opm/media/decoder.h>
+#include <opm/media/phone_frame.h>
+#include <opm/media/recorder.h>
+#include <opm/settings.h>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -16,7 +16,7 @@ struct SDL_Renderer;
 struct SDL_Texture;
 union SDL_Event;
 
-namespace openmirror::media {
+namespace opm::media {
 
 class Renderer {
 public:
@@ -349,7 +349,7 @@ private:
     void draw_version_panel();
 
     // Settings panel (gear icon in island)
-    openmirror::Settings settings_;
+    opm::Settings settings_;
     bool settings_panel_visible_ = false;
     bool settings_panel_animating_ = false;
     float settings_panel_anim_ = 0.0f;
@@ -600,4 +600,4 @@ private:
     void stop_android_discovery();
 };
 
-} // namespace openmirror::media
+} // namespace opm::media

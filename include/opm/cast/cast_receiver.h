@@ -2,13 +2,13 @@
 
 #ifdef ENABLE_CAST
 
-#include <openmirror/media/decoder.h>
+#include <opm/media/decoder.h>
 #include <atomic>
 #include <functional>
 #include <string>
 #include <thread>
 
-namespace openmirror::cast {
+namespace opm::cast {
 
 // Google Cast v2 receiver — lets Android devices discover and cast their screen.
 //
@@ -50,6 +50,6 @@ private:
     std::function<void()> on_disconnect_;
 };
 
-} // namespace openmirror::cast
+} // namespace opm::cast
 
 #endif // ENABLE_CAST

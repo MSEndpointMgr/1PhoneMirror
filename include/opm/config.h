@@ -3,16 +3,16 @@
 // Build configuration
 // Version macros are injected by CMake from project(... VERSION X.Y.Z) so
 // CMakeLists.txt is the single source of truth for the app version.
-#ifndef OPENMIRROR_VERSION_MAJOR
-#define OPENMIRROR_VERSION_MAJOR 0
+#ifndef OPM_VERSION_MAJOR
+#define OPM_VERSION_MAJOR 0
 #endif
-#ifndef OPENMIRROR_VERSION_MINOR
-#define OPENMIRROR_VERSION_MINOR 0
+#ifndef OPM_VERSION_MINOR
+#define OPM_VERSION_MINOR 0
 #endif
-#ifndef OPENMIRROR_VERSION_PATCH
-#define OPENMIRROR_VERSION_PATCH 0
+#ifndef OPM_VERSION_PATCH
+#define OPM_VERSION_PATCH 0
 #endif
-#define OPENMIRROR_APP_NAME "1PhoneMirror by MSEndpointMgr"
+#define OPM_APP_NAME "1PhoneMirror by MSEndpointMgr"
 
 // Default network settings
 constexpr int AIRPLAY_PORT = 7000;

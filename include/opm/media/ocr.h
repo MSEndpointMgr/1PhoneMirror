@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <string>
 
-namespace openmirror::media {
+namespace opm::media {
 
 struct OcrJobResult {
     bool ok = false;
@@ -22,4 +22,4 @@ struct OcrJobResult {
 // keep `rgba` alive for the duration of the call.
 OcrJobResult run_ocr_rgba(const uint8_t* rgba, int w, int h);
 
-} // namespace openmirror::media
+} // namespace opm::media

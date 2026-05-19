@@ -1,10 +1,10 @@
-#include <openmirror/media/audio_output.h>
+#include <opm/media/audio_output.h>
 #include <cstring>
 #include <iostream>
 
 #include <SDL.h>
 
-namespace openmirror::media {
+namespace opm::media {
 
 AudioOutput::AudioOutput() = default;
 
@@ -95,4 +95,4 @@ void AudioOutput::audio_callback(void* userdata, uint8_t* stream, int len) {
     }
 }
 
-} // namespace openmirror::media
+} // namespace opm::media

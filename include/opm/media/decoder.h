@@ -11,7 +11,7 @@ struct AVFrame;
 struct AVPacket;
 struct SwsContext;
 
-namespace openmirror::media {
+namespace opm::media {
 
 // Decoded frame ready for rendering
 struct VideoFrame {
@@ -77,4 +77,4 @@ private:
     std::mutex audio_mutex_;
 };
 
-} // namespace openmirror::media
+} // namespace opm::media

@@ -1,11 +1,11 @@
-#include <openmirror/app.h>
-#include <openmirror/config.h>
-#include <openmirror/log_buffer.h>
-#include <openmirror/network/tcp_server.h>
-#include <openmirror/airplay/srp_pin.h>
-#include <openmirror/settings.h>
+#include <opm/app.h>
+#include <opm/config.h>
+#include <opm/log_buffer.h>
+#include <opm/network/tcp_server.h>
+#include <opm/airplay/srp_pin.h>
+#include <opm/settings.h>
 #ifdef ENABLE_ANDROID
-#include <openmirror/android/scrcpy_receiver.h>
+#include <opm/android/scrcpy_receiver.h>
 #endif
 #include <iostream>
 #include <string>
@@ -221,16 +221,16 @@ int main(int argc, char* argv[]) {
     // try to bind ports or register the mDNS service.
     kill_stale_instances();
     // Initialize Winsock
-    openmirror::network::TcpServer::init_winsock();
+    opm::network::TcpServer::init_winsock();
     // Check and offer to create firewall rules
     check_firewall_rules();
     // Install log capture (tees cout to internal buffer). File logging
     // is opt-in via the Settings panel toggle (saved alongside the user's
     // screenshots only for the current session).
-    openmirror::LogBuffer::instance().install();
+    opm::LogBuffer::instance().install();
 #endif
 
-    openmirror::App::Config config;
+    opm::App::Config config;
 
     // Parse command line arguments
     bool name_overridden = false;
@@ -263,7 +263,7 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--android-pair" && i + 2 < argc) {
             std::string ipport = argv[++i];
             std::string code   = argv[++i];
-            openmirror::android::AdbController adb;
+            opm::android::AdbController adb;
             if (!config.android_adb_path.empty()) adb.set_adb_path(config.android_adb_path);
             std::string msg;
             bool ok = adb.pair(ipport, code, &msg);
@@ -271,7 +271,7 @@ int main(int argc, char* argv[]) {
             return ok ? 0 : 2;
         } else if (arg == "--android-connect" && i + 1 < argc) {
             std::string ipport = argv[++i];
-            openmirror::android::AdbController adb;
+            opm::android::AdbController adb;
             if (!config.android_adb_path.empty()) adb.set_adb_path(config.android_adb_path);
             std::string msg;
             bool ok = adb.connect(ipport, &msg);
@@ -281,7 +281,7 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--airplay-pin") {
             config.airplay_require_pin = true;
         } else if (arg == "--srp-self-test") {
-            bool ok = openmirror::airplay::srp_pin_self_test();
+            bool ok = opm::airplay::srp_pin_self_test();
             return ok ? 0 : 2;
         } else {
             std::cerr << "Unknown option: " << arg << "\n";
@@ -290,14 +290,14 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    openmirror::App app;
+    opm::App app;
 
     // If the user enabled "Identify as <ComputerName>" in the Settings panel
     // and didn't pass an explicit --name, build the service name from the
     // local computer name. Helps disambiguate multiple instances on the same
     // network. Setting takes effect at next launch.
     if (!name_overridden) {
-        auto s = openmirror::Settings::load();
+        auto s = opm::Settings::load();
         if (s.use_computer_name) {
 #ifdef _WIN32
             char buf[MAX_COMPUTERNAME_LENGTH + 1] = {};
@@ -319,7 +319,7 @@ int main(int argc, char* argv[]) {
     app.shutdown();
 
 #ifdef _WIN32
-    openmirror::network::TcpServer::cleanup_winsock();
+    opm::network::TcpServer::cleanup_winsock();
 #endif
 
     return result;

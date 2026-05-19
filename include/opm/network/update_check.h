@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace openmirror::network {
+namespace opm::network {
 
 struct UpdateCheckResult {
     bool        ok = false;             // true if the network call succeeded
@@ -20,4 +20,4 @@ struct UpdateCheckResult {
 // whether to surface the error).
 UpdateCheckResult check_for_update(const std::string& current_version);
 
-} // namespace openmirror::network
+} // namespace opm::network

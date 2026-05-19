@@ -1,4 +1,4 @@
-#include <openmirror/airplay/srp_pin.h>
+#include <opm/airplay/srp_pin.h>
 
 #include <openssl/bn.h>
 #include <openssl/sha.h>
@@ -8,7 +8,7 @@
 #include <cstring>
 #include <iostream>
 
-namespace openmirror::airplay {
+namespace opm::airplay {
 
 namespace {
 
@@ -515,4 +515,4 @@ bool srp_pin_self_test() {
     return ok && kmatch;
 }
 
-} // namespace openmirror::airplay
+} // namespace opm::airplay

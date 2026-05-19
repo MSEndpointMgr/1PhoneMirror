@@ -14,7 +14,7 @@
 
 #ifdef ENABLE_ANDROID
 
-#include <openmirror/android/scrcpy_receiver.h>
+#include <opm/android/scrcpy_receiver.h>
 
 #include <array>
 #include <cstdint>
@@ -47,7 +47,7 @@ extern "C" {
   #define CLOSESOCK ::close
 #endif
 
-namespace openmirror::android {
+namespace opm::android {
 
 // ----------------------------------------------------------------------------
 // Process helpers (Windows). Non-Windows paths are stubs for now.
@@ -541,6 +541,6 @@ void ScrcpyReceiver::worker_() {
     if (on_disconnect_) on_disconnect_();
 }
 
-} // namespace openmirror::android
+} // namespace opm::android
 
 #endif // ENABLE_ANDROID

@@ -8,7 +8,7 @@
 #include <thread>
 #include <vector>
 
-namespace openmirror::airplay {
+namespace opm::airplay {
 
 // Advertises an AirPlay service via mDNS multicast.
 // Implements a lightweight mDNS responder (RFC 6762) that listens
@@ -37,4 +37,4 @@ private:
     Impl* impl_ = nullptr;
 };
 
-} // namespace openmirror::airplay
+} // namespace opm::airplay

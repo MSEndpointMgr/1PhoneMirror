@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace openmirror::airplay {
+namespace opm::airplay {
 
 // SRP-6a server for AirPlay 1 PIN pairing.
 // Uses RFC 5054 Group 14 (2048-bit), SHA-1 hashing — what classic
@@ -75,4 +75,4 @@ std::vector<uint8_t> srp_pin_decrypt_ltpk(const std::vector<uint8_t>& session_K,
 std::vector<uint8_t> srp_pin_encrypt_ltpk(const std::vector<uint8_t>& session_K,
                                           const std::vector<uint8_t>& our_ltpk);
 
-} // namespace openmirror::airplay
+} // namespace opm::airplay

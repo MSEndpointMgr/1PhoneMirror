@@ -11,7 +11,7 @@
 #include <streambuf>
 #include <thread>
 
-namespace openmirror {
+namespace opm {
 
 // Thread-safe ring buffer that captures std::cout output
 class LogBuffer {
@@ -156,4 +156,4 @@ private:
     std::unique_ptr<TeeBuf> cerr_tee_buf_;
 };
 
-} // namespace openmirror
+} // namespace opm

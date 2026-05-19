@@ -1,13 +1,13 @@
 #pragma once
 
-#include <openmirror/network/tcp_server.h>
+#include <opm/network/tcp_server.h>
 #include <functional>
 #include <map>
 #include <mutex>
 #include <string>
 #include <vector>
 
-namespace openmirror::network {
+namespace opm::network {
 
 // Simple RTSP server for AirPlay / Miracast control
 // Handles RTSP methods: OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN, SET_PARAMETER, GET_PARAMETER
@@ -61,4 +61,4 @@ private:
     std::multimap<std::string, socket_t> clients_by_ip_; // ip -> active socket
 };
 
-} // namespace openmirror::network
+} // namespace opm::network

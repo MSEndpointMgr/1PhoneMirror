@@ -1,12 +1,12 @@
 #pragma once
 
-#include <openmirror/airplay/mdns_service.h>
-#include <openmirror/airplay/mirror_buffer.h>
-#include <openmirror/airplay/pairing.h>
-#include <openmirror/airplay/srp_pin.h>
-#include <openmirror/media/decoder.h>
-#include <openmirror/network/rtsp_server.h>
-#include <openmirror/network/tcp_server.h>
+#include <opm/airplay/mdns_service.h>
+#include <opm/airplay/mirror_buffer.h>
+#include <opm/airplay/pairing.h>
+#include <opm/airplay/srp_pin.h>
+#include <opm/media/decoder.h>
+#include <opm/network/rtsp_server.h>
+#include <opm/network/tcp_server.h>
 #include <atomic>
 #include <functional>
 #include <map>
@@ -16,7 +16,7 @@
 #include <thread>
 #include <vector>
 
-namespace openmirror::airplay {
+namespace opm::airplay {
 
 // AirPlay receiver server
 // Handles the full AirPlay mirroring session:
@@ -175,4 +175,4 @@ private:
     OnDisconnect on_disconnect_;
 };
 
-} // namespace openmirror::airplay
+} // namespace opm::airplay

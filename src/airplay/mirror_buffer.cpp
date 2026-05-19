@@ -1,4 +1,4 @@
-#include <openmirror/airplay/mirror_buffer.h>
+#include <opm/airplay/mirror_buffer.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <cstring>
@@ -7,7 +7,7 @@
 #include <iostream>
 #include <iomanip>
 
-namespace openmirror::airplay {
+namespace opm::airplay {
 
 MirrorBuffer::MirrorBuffer() = default;
 
@@ -101,4 +101,4 @@ void MirrorBuffer::decrypt(uint8_t* input, uint8_t* output, int len) {
     EVP_EncryptUpdate(ctx_, output, &out_len, input, len);
 }
 
-} // namespace openmirror::airplay
+} // namespace opm::airplay

@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <openssl/evp.h>
 
-namespace openmirror::airplay {
+namespace opm::airplay {
 
 // AES-128-CTR decryption for AirPlay mirror video stream.
 // Key derivation:
@@ -35,4 +35,4 @@ private:
     uint8_t aes_key_[16] = {};
 };
 
-} // namespace openmirror::airplay
+} // namespace opm::airplay

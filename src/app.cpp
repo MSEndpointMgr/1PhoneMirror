@@ -1,7 +1,7 @@
-#include <openmirror/app.h>
-#include <openmirror/config.h>
-#include <openmirror/settings.h>
-#include <openmirror/network/telemetry.h>
+#include <opm/app.h>
+#include <opm/config.h>
+#include <opm/settings.h>
+#include <opm/network/telemetry.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -18,7 +18,7 @@
   #include <tlhelp32.h>
 #endif
 
-namespace openmirror {
+namespace opm {
 
 namespace {
 #if defined(_WIN32) && defined(ENABLE_ANDROID)
@@ -84,10 +84,10 @@ bool App::init(const Config& config) {
     config_ = config;
 
     std::cout << "========================================\n";
-    std::cout << "  " << OPENMIRROR_APP_NAME << " v"
-              << OPENMIRROR_VERSION_MAJOR << "."
-              << OPENMIRROR_VERSION_MINOR << "."
-              << OPENMIRROR_VERSION_PATCH << "\n";
+    std::cout << "  " << OPM_APP_NAME << " v"
+              << OPM_VERSION_MAJOR << "."
+              << OPM_VERSION_MINOR << "."
+              << OPM_VERSION_PATCH << "\n";
     std::cout << "========================================\n\n";
 
     // Initialize the renderer (SDL2 window)
@@ -289,10 +289,10 @@ bool App::init(const Config& config) {
     if (config_.enable_android) {
         // Resolve binaries.
         std::string adb_path = resolve_path(
-            config_.android_adb_path, "OPENMIRROR_ADB",
+            config_.android_adb_path, "OPM_ADB",
             "tools/adb/adb.exe", /*fallback_path_lookup=*/true);
         std::string jar_path = resolve_path(
-            config_.android_scrcpy_jar, "OPENMIRROR_SCRCPY_JAR",
+            config_.android_scrcpy_jar, "OPM_SCRCPY_JAR",
             "tools/scrcpy-server.jar", /*fallback_path_lookup=*/false);
 
         adb_.set_adb_path(adb_path);
@@ -530,12 +530,12 @@ bool App::init(const Config& config) {
     // Opt-in anonymous launch ping. No-op unless the user has enabled
     // telemetry in the Settings panel. Fire-and-forget; never blocks startup.
     {
-        auto s = openmirror::Settings::load();
+        auto s = opm::Settings::load();
         std::ostringstream v;
-        v << OPENMIRROR_VERSION_MAJOR << '.'
-          << OPENMIRROR_VERSION_MINOR << '.'
-          << OPENMIRROR_VERSION_PATCH;
-        openmirror::network::send_launch_ping_async(v.str(), s.telemetry_enabled);
+        v << OPM_VERSION_MAJOR << '.'
+          << OPM_VERSION_MINOR << '.'
+          << OPM_VERSION_PATCH;
+        opm::network::send_launch_ping_async(v.str(), s.telemetry_enabled);
     }
 
     running_.store(true);
@@ -614,4 +614,4 @@ void App::shutdown() {
     std::cout << "[App] Shutdown complete\n";
 }
 
-} // namespace openmirror
+} // namespace opm

@@ -1,4 +1,4 @@
-#include <openmirror/network/update_check.h>
+#include <opm/network/update_check.h>
 
 #include <cstdint>
 #include <sstream>
@@ -14,7 +14,7 @@
 #pragma comment(lib, "winhttp.lib")
 #endif
 
-namespace openmirror::network {
+namespace opm::network {
 
 namespace {
 
@@ -222,4 +222,4 @@ UpdateCheckResult check_for_update(const std::string& current_version) {
 #endif
 }
 
-} // namespace openmirror::network
+} // namespace opm::network

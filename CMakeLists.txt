@@ -110,11 +110,11 @@ target_include_directories(1PhoneMirror PRIVATE
 )
 
 # Derive C++ version macros from the single source of truth (project()).
-# Keeps OPENMIRROR_VERSION_* in sync with package version automatically.
+# Keeps OPM_VERSION_* in sync with package version automatically.
 target_compile_definitions(1PhoneMirror PRIVATE
-    OPENMIRROR_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
-    OPENMIRROR_VERSION_MINOR=${PROJECT_VERSION_MINOR}
-    OPENMIRROR_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+    OPM_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    OPM_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    OPM_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
 
 target_link_libraries(1PhoneMirror PRIVATE
@@ -163,7 +163,7 @@ if(WIN32)
     target_link_libraries(1PhoneMirror PRIVATE windowsapp.lib)
     target_compile_definitions(1PhoneMirror PRIVATE NOMINMAX)
     # Embed app manifest for DPI awareness (disable auto-generated manifest to avoid duplicate)
-    target_sources(1PhoneMirror PRIVATE resources/openmirror.rc)
+    target_sources(1PhoneMirror PRIVATE resources/1phonemirror.rc)
     set_target_properties(1PhoneMirror PROPERTIES LINK_FLAGS "/MANIFEST:NO /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")
 endif()
 

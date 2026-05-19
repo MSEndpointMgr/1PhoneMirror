@@ -1,4 +1,4 @@
-#include <openmirror/media/decoder.h>
+#include <opm/media/decoder.h>
 #include <cstring>
 #include <iostream>
 
@@ -8,7 +8,7 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-namespace openmirror::media {
+namespace opm::media {
 
 // --- VideoFrame ---
 
@@ -234,4 +234,4 @@ void Decoder::flush() {
     }
 }
 
-} // namespace openmirror::media
+} // namespace opm::media

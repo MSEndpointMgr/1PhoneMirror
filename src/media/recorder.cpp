@@ -1,4 +1,4 @@
-#include <openmirror/media/recorder.h>
+#include <opm/media/recorder.h>
 
 #include <algorithm>
 #include <cstring>
@@ -17,7 +17,7 @@ extern "C" {
 #include <libavfilter/buffersrc.h>
 }
 
-namespace openmirror::media {
+namespace opm::media {
 
 namespace {
 
@@ -561,4 +561,4 @@ bool Recorder::init_gif_filter_graph(int src_w, int src_h) {
     return true;
 }
 
-} // namespace openmirror::media
+} // namespace opm::media

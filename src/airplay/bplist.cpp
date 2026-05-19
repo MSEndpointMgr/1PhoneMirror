@@ -1,8 +1,8 @@
-#include <openmirror/airplay/bplist.h>
+#include <opm/airplay/bplist.h>
 #include <cstring>
 #include <iostream>
 
-namespace openmirror::airplay {
+namespace opm::airplay {
 
 // ===== BPlistReader =====
 
@@ -405,4 +405,4 @@ std::vector<uint8_t> BPlistWriter::build(int root_idx) const {
     return result;
 }
 
-} // namespace openmirror::airplay
+} // namespace opm::airplay

@@ -22,7 +22,7 @@ struct AVFilterGraph;
 struct AVFilterContext;
 }
 
-namespace openmirror::media {
+namespace opm::media {
 
 enum class RecordFormat {
     MP4 = 0,
@@ -144,4 +144,4 @@ private:
     std::string        error_msg_;
 };
 
-} // namespace openmirror::media
+} // namespace opm::media

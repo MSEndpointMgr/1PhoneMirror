@@ -2,14 +2,14 @@
 
 #ifdef ENABLE_MIRACAST
 
-#include <openmirror/media/decoder.h>
+#include <opm/media/decoder.h>
 #include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
 #include <thread>
 
-namespace openmirror::miracast {
+namespace opm::miracast {
 
 // Miracast receiver using WiFi Direct + WFD (Wi-Fi Display) protocol.
 //
@@ -58,6 +58,6 @@ private:
     std::function<void()> on_disconnect_;
 };
 
-} // namespace openmirror::miracast
+} // namespace opm::miracast
 
 #endif // ENABLE_MIRACAST

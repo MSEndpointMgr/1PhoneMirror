@@ -2,14 +2,14 @@
 
 #ifdef ENABLE_ANDROID
 
-#include <openmirror/app.h>
+#include <opm/app.h>
 
 #include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <thread>
 
-namespace openmirror {
+namespace opm {
 
 namespace {
 // Each scrcpy session needs a unique 127.0.0.1:<port> for its reverse
@@ -304,6 +304,6 @@ void App::android_disconnect(const std::string& serial) {
     if (should_reset) renderer_.request_reset();
 }
 
-} // namespace openmirror
+} // namespace opm
 
 #endif // ENABLE_ANDROID

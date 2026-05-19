@@ -5,7 +5,7 @@
 
 typedef struct evp_pkey_st EVP_PKEY;
 
-namespace openmirror::airplay {
+namespace opm::airplay {
 
 // Ed25519 / X25519 key exchange for AirPlay pair-setup and pair-verify
 class Pairing {
@@ -72,4 +72,4 @@ private:
     int keymsg_len_ = 0;
 };
 
-} // namespace openmirror::airplay
+} // namespace opm::airplay

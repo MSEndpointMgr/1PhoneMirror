@@ -1,8 +1,8 @@
-#include <openmirror/network/rtsp_server.h>
+#include <opm/network/rtsp_server.h>
 #include <iostream>
 #include <sstream>
 
-namespace openmirror::network {
+namespace opm::network {
 
 RtspServer::RtspServer() = default;
 RtspServer::~RtspServer() { stop(); }
@@ -162,4 +162,4 @@ void RtspServer::send_response(socket_t client, const RtspRequest& req,
     }
 }
 
-} // namespace openmirror::network
+} // namespace opm::network

@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-namespace openmirror::airplay {
+namespace opm::airplay {
 
 // Minimal Apple binary plist reader for AirPlay SETUP messages
 class BPlistReader {
@@ -68,4 +68,4 @@ private:
     std::vector<std::vector<uint8_t>> objects_;
 };
 
-} // namespace openmirror::airplay
+} // namespace opm::airplay

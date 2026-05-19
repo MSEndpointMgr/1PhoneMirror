@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-namespace openmirror {
+namespace opm {
 
 // User-configurable runtime settings. Persisted to
 // %APPDATA%\1PhoneMirror\settings.ini on Windows.
@@ -55,4 +55,4 @@ struct Settings {
     bool save() const;
 };
 
-} // namespace openmirror
+} // namespace opm

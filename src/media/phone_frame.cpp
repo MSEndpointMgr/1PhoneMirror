@@ -1,11 +1,11 @@
-#include <openmirror/media/phone_frame.h>
+#include <opm/media/phone_frame.h>
 #include <SDL.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iostream>
 
-namespace openmirror::media {
+namespace opm::media {
 
 // RGBA color helper (native byte order for pixel buffer)
 static constexpr uint32_t rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
@@ -472,4 +472,4 @@ void PhoneFrame::draw_rect(uint32_t* pixels, int img_w, int img_h,
     }
 }
 
-} // namespace openmirror::media
+} // namespace opm::media

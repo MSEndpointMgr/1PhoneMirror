@@ -29,7 +29,7 @@ constexpr sock_t BAD_SOCK = -1;
 #define SOCK_CLOSE close
 #endif
 
-#include <openmirror/cast/cast_receiver.h>
+#include <opm/cast/cast_receiver.h>
 #include "cast_proto.h"
 
 #include <openssl/ssl.h>
@@ -80,7 +80,7 @@ static constexpr const char* NS_MEDIA      = "urn:x-cast:com.google.cast.media";
 
 static constexpr const char* MIRROR_APP_ID = "0F5096E8";
 
-namespace openmirror::cast {
+namespace opm::cast {
 
 // ---- Helpers ----
 
@@ -1522,6 +1522,6 @@ void CastReceiver::stop() {
     std::cout << "[Cast] Receiver stopped\n";
 }
 
-} // namespace openmirror::cast
+} // namespace opm::cast
 
 #endif // ENABLE_CAST

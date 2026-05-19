@@ -1,4 +1,4 @@
-#include <openmirror/network/telemetry.h>
+#include <opm/network/telemetry.h>
 
 #include <atomic>
 #include <chrono>
@@ -19,7 +19,7 @@
 #pragma comment(lib, "winhttp.lib")
 #endif
 
-namespace openmirror::network {
+namespace opm::network {
 
 namespace {
 
@@ -245,7 +245,7 @@ void send_launch_ping_async(const std::string& app_version, bool enabled) {
 #else
     // Snapshot needed state on the calling thread so the worker outlives
     // any stack we were called from.
-    const std::string url     = OPENMIRROR_TELEMETRY_URL "/ping";
+    const std::string url     = OPM_TELEMETRY_URL "/ping";
     const std::string id      = install_id();
     const std::string version = app_version;
     const std::string osbuild = os_build_string();
@@ -274,4 +274,4 @@ void send_launch_ping_async(const std::string& app_version, bool enabled) {
 #endif
 }
 
-} // namespace openmirror::network
+} // namespace opm::network

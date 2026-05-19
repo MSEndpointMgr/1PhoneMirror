@@ -1,9 +1,9 @@
-#include <openmirror/media/renderer.h>
-#include <openmirror/log_buffer.h>
-#include <openmirror/config.h>
-#include <openmirror/network/update_check.h>
+#include <opm/media/renderer.h>
+#include <opm/log_buffer.h>
+#include <opm/config.h>
+#include <opm/network/update_check.h>
 #ifdef _WIN32
-#include <openmirror/media/ocr.h>
+#include <opm/media/ocr.h>
 #endif
 #include <algorithm>
 #include <chrono>
@@ -433,7 +433,7 @@ static SDL_Texture* create_android_icon(SDL_Renderer* renderer, int sz,
     return tex;
 }
 
-namespace openmirror::media {
+namespace opm::media {
 
 Renderer::Renderer() = default;
 
@@ -472,7 +472,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
     // the first phone-frame generate so the initial texture uses the saved
     // colour. Otherwise set_bezel_color() would invalidate the freshly-built
     // frame texture and the waiting screen would never render.
-    settings_ = openmirror::Settings::load();
+    settings_ = opm::Settings::load();
     phone_frame_.set_bezel_color(settings_.bezel_r, settings_.bezel_g, settings_.bezel_b);
     SDL_SetWindowAlwaysOnTop(window_, settings_.always_on_top ? SDL_TRUE : SDL_FALSE);
 
@@ -1117,14 +1117,14 @@ void Renderer::run() {
                     (event.key.keysym.mod & KMOD_CTRL)) {
                     if (event.key.keysym.sym == SDLK_c) {
                         std::string all;
-                        for (auto& ln : openmirror::LogBuffer::instance().get_lines()) {
+                        for (auto& ln : opm::LogBuffer::instance().get_lines()) {
                             all += ln; all += '\n';
                         }
                         SDL_SetClipboardText(all.c_str());
                         std::cout << "[Renderer] Log copied to clipboard ("
                                   << all.size() << " bytes)\n";
                     } else if (event.key.keysym.sym == SDLK_x) {
-                        openmirror::LogBuffer::instance().clear();
+                        opm::LogBuffer::instance().clear();
                         std::cout << "[Renderer] Log cleared\n";
                     }
                 }
@@ -1380,7 +1380,7 @@ void Renderer::run() {
                                 return;
                             } else if (clicked_action == "copy") {
                                 std::string all;
-                                for (auto& ln : openmirror::LogBuffer::instance().get_lines()) {
+                                for (auto& ln : opm::LogBuffer::instance().get_lines()) {
                                     all += ln;
                                     all += '\n';
                                 }
@@ -1388,7 +1388,7 @@ void Renderer::run() {
                                 std::cout << "[Renderer] Log copied to clipboard ("
                                           << all.size() << " bytes)\n";
                             } else if (clicked_action == "clear") {
-                                openmirror::LogBuffer::instance().clear();
+                                opm::LogBuffer::instance().clear();
                                 std::cout << "[Renderer] Log cleared\n";
                             } else if (tgt == "screenshot") {
                                 if (clicked_action == "shot") {
@@ -1729,7 +1729,7 @@ void Renderer::run() {
                                     std::error_code ec;
                                     std::filesystem::create_directories(screenshot_dir_, ec);
                                     std::string path = screenshot_dir_ + "/1PhoneMirror.log";
-                                    if (openmirror::LogBuffer::instance().open_file(path)) {
+                                    if (opm::LogBuffer::instance().open_file(path)) {
                                         std::cout << "[Log] File logging enabled: " << path << "\n";
                                     } else {
                                         std::cout << "[Log] Failed to open log file: " << path << "\n";
@@ -1737,7 +1737,7 @@ void Renderer::run() {
                                     }
                                 } else {
                                     std::cout << "[Log] File logging disabled\n";
-                                    openmirror::LogBuffer::instance().close_file();
+                                    opm::LogBuffer::instance().close_file();
                                 }
                             }
                             if (settings_fmt_mp4_btn_.w > 0 &&
@@ -5002,7 +5002,7 @@ void Renderer::draw_log_panel() {
     SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
 
     // Get log lines
-    auto lines = openmirror::LogBuffer::instance().get_lines();
+    auto lines = opm::LogBuffer::instance().get_lines();
     if (lines.empty()) return;
 
     // Layout is computed against the FULL-OPEN panel width, not the current
@@ -5018,7 +5018,7 @@ void Renderer::draw_log_panel() {
 
     // Rebuild the wrapped+rasterized row cache only when something the
     // layout depends on actually changes.
-    uint64_t cur_ver = openmirror::LogBuffer::instance().version();
+    uint64_t cur_ver = opm::LogBuffer::instance().version();
     bool need_rebuild = (cur_ver != log_cache_version_) ||
                         (font_sz != log_cache_font_sz_) ||
                         (full_panel_w != log_cache_full_w_);
@@ -7424,13 +7424,13 @@ void Renderer::check_for_update_async(bool show_when_up_to_date) {
     // thread only touches its own locals plus the renderer fields it owns.
     char ver[32];
     std::snprintf(ver, sizeof(ver), "%d.%d.%d",
-                  OPENMIRROR_VERSION_MAJOR,
-                  OPENMIRROR_VERSION_MINOR,
-                  OPENMIRROR_VERSION_PATCH);
+                  OPM_VERSION_MAJOR,
+                  OPM_VERSION_MINOR,
+                  OPM_VERSION_PATCH);
     std::string current = ver;
 
     std::thread([this, current, show_when_up_to_date]() {
-        auto result = openmirror::network::check_for_update(current);
+        auto result = opm::network::check_for_update(current);
         {
             std::lock_guard<std::mutex> lk(update_check_mutex_);
             update_latest_version_ = result.latest_version;
@@ -8147,4 +8147,4 @@ void Renderer::process_ocr_result() {
 }
 #endif // _WIN32
 
-} // namespace openmirror::media
+} // namespace opm::media

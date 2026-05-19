@@ -1,8 +1,8 @@
 #pragma once
 
-#include <openmirror/media/audio_output.h>
-#include <openmirror/media/decoder.h>
-#include <openmirror/media/renderer.h>
+#include <opm/media/audio_output.h>
+#include <opm/media/decoder.h>
+#include <opm/media/renderer.h>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -10,19 +10,19 @@
 #include <vector>
 
 #ifdef ENABLE_AIRPLAY
-#include <openmirror/airplay/airplay_server.h>
+#include <opm/airplay/airplay_server.h>
 #endif
 #ifdef ENABLE_MIRACAST
-#include <openmirror/miracast/miracast_receiver.h>
+#include <opm/miracast/miracast_receiver.h>
 #endif
 #ifdef ENABLE_CAST
-#include <openmirror/cast/cast_receiver.h>
+#include <opm/cast/cast_receiver.h>
 #endif
 #ifdef ENABLE_ANDROID
-#include <openmirror/android/scrcpy_receiver.h>
+#include <opm/android/scrcpy_receiver.h>
 #endif
 
-namespace openmirror {
+namespace opm {
 
 class App {
 public:
@@ -121,4 +121,4 @@ private:
     std::atomic<bool> shutdown_done_{false};
 };
 
-} // namespace openmirror
+} // namespace opm

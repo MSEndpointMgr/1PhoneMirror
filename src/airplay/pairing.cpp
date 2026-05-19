@@ -1,4 +1,4 @@
-#include <openmirror/airplay/pairing.h>
+#include <opm/airplay/pairing.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
 #include <openssl/sha.h>
@@ -10,7 +10,7 @@ extern "C" {
     void playfair_decrypt(unsigned char* message3, unsigned char* cipherText, unsigned char* keyOut);
 }
 
-namespace openmirror::airplay {
+namespace opm::airplay {
 
 static constexpr int ED25519_KEY_SIZE = 32;
 static constexpr int X25519_KEY_SIZE = 32;
@@ -420,4 +420,4 @@ bool FairPlay::decrypt(const uint8_t* input, uint8_t* output) {
     return true;
 }
 
-} // namespace openmirror::airplay
+} // namespace opm::airplay

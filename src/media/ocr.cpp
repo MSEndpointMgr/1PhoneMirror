@@ -11,7 +11,7 @@
 //     ABI-style <Windows.Foundation.h> header (which conflicts in some
 //     translation units).
 
-#include "openmirror/media/ocr.h"
+#include "opm/media/ocr.h"
 
 #include <Windows.h>
 
@@ -58,7 +58,7 @@ void ensure_apartment() {
 
 } // namespace
 
-namespace openmirror::media {
+namespace opm::media {
 
 OcrJobResult run_ocr_rgba(const uint8_t* rgba, int w, int h) {
     OcrJobResult out;
@@ -144,4 +144,4 @@ OcrJobResult run_ocr_rgba(const uint8_t* rgba, int w, int h) {
     }
 }
 
-} // namespace openmirror::media
+} // namespace opm::media

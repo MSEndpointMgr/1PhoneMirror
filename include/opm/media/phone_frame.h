@@ -5,7 +5,7 @@
 struct SDL_Renderer;
 struct SDL_Texture;
 
-namespace openmirror::media {
+namespace opm::media {
 
 // Generates and manages an iPhone-style frame overlay.
 // The frame is a dark bezel with rounded corners, Dynamic Island,
@@ -90,4 +90,4 @@ private:
     bool is_tablet_ = false;
 };
 
-} // namespace openmirror::media
+} // namespace opm::media

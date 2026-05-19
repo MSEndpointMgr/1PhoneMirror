@@ -13,7 +13,7 @@
 
 #include <iostream>
 
-namespace openmirror::airplay {
+namespace opm::airplay {
 
 // Future: AirPlay 2 mirroring protocol details
 // - Screen mirroring uses a proprietary binary protocol over TCP
@@ -24,4 +24,4 @@ namespace openmirror::airplay {
 // For unencrypted testing (e.g., with older iOS or macOS clients),
 // the stream can be received and decoded directly.
 
-} // namespace openmirror::airplay
+} // namespace opm::airplay

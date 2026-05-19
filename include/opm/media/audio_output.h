@@ -1,13 +1,13 @@
 #pragma once
 
-#include <openmirror/media/decoder.h>
+#include <opm/media/decoder.h>
 #include <atomic>
 #include <mutex>
 #include <queue>
 
 struct SDL_AudioSpec;
 
-namespace openmirror::media {
+namespace opm::media {
 
 class AudioOutput {
 public:
@@ -34,4 +34,4 @@ private:
     std::atomic<bool> initialized_{false};
 };
 
-} // namespace openmirror::media
+} // namespace opm::media

@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace openmirror::cast {
+namespace opm::cast {
 
 struct CastMessage {
     uint32_t protocol_version = 0; // CASTV2_1_0
@@ -226,4 +226,4 @@ struct DeviceAuthMsg {
     }
 };
 
-} // namespace openmirror::cast
+} // namespace opm::cast

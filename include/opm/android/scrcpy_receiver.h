@@ -2,7 +2,7 @@
 
 #ifdef ENABLE_ANDROID
 
-#include <openmirror/media/decoder.h>
+#include <opm/media/decoder.h>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -11,7 +11,7 @@
 #include <thread>
 #include <vector>
 
-namespace openmirror::android {
+namespace opm::android {
 
 // Wireless Android screen-mirror receiver based on the scrcpy server
 // (Apache-2.0, https://github.com/Genymobile/scrcpy).
@@ -160,6 +160,6 @@ private:
     void*     server_proc_ = nullptr;  // HANDLE on Windows
 };
 
-} // namespace openmirror::android
+} // namespace opm::android
 
 #endif // ENABLE_ANDROID
