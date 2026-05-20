@@ -6,13 +6,14 @@
 // Uses Media Foundation directly to keep dependencies thin (mf, mfplat,
 // mfreadwrite, mfuuid, shlwapi — all in the platform SDK).
 //
-// Milestone 1 (this file): device enumeration only. start()/stop()/
-// get_latest() are scaffolding that report a not-implemented error so
-// the rest of the app can already wire up the UI and settings.
+// Milestone 2: enumerate() + live capture pump via IMFSourceReader.
+// Worker thread owns all COM resources; main thread polls get_latest()
+// from the SDL render loop.
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <future>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -49,10 +50,9 @@ public:
     // Begin capturing from `device_id` (MF symbolic link from enumerate()).
     // Empty `device_id` picks the system default. preferred_width/height
     // are hints; the driver picks the closest supported mode. Returns
-    // false on error — call last_error() for details.
-    //
-    // Milestone 1: returns false with "not implemented" until the capture
-    // pump lands in milestone 2.
+    // false on error — call last_error() for details. Blocks briefly
+    // (a few hundred ms) while MF activates the device and negotiates
+    // the output format.
     bool start(const std::string& device_id,
                int preferred_width  = 1280,
                int preferred_height = 720);
@@ -79,6 +79,14 @@ public:
 
 private:
     void set_error(const std::string& msg);
+
+    // Capture worker entry point. Runs on `worker_`. Signals `ready`
+    // once init has succeeded (running_ = true) or failed. After that,
+    // pumps IMFSourceReader::ReadSample until running_ flips to false.
+    void run_capture_worker(std::string device_id,
+                            int preferred_width,
+                            int preferred_height,
+                            std::promise<bool> ready);
 
     std::atomic<bool> running_{false};
     std::atomic<int>  current_w_{0};
