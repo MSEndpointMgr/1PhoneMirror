@@ -182,3 +182,22 @@ add_custom_command(TARGET 1PhoneMirror POST_BUILD
         "${CMAKE_SOURCE_DIR}/android_icon.png"
         "$<TARGET_FILE_DIR:1PhoneMirror>/android_icon.png"
 )
+
+# Stage the vendored runtime helpers (adb + scrcpy-server.jar) next to
+# the EXE on every build. src/app.cpp looks for tools/adb/adb.exe and
+# tools/scrcpy-server.jar relative to the executable, and package.ps1
+# harvests the whole build/<Config> folder into the MSI, so this single
+# copy keeps both `cmake --build` and `package.ps1` correct.
+if (ENABLE_ANDROID AND EXISTS "${CMAKE_SOURCE_DIR}/tools")
+    add_custom_command(TARGET 1PhoneMirror POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/tools"
+            "$<TARGET_FILE_DIR:1PhoneMirror>/tools"
+        COMMENT "Staging tools/ (adb, scrcpy-server.jar) into $<TARGET_FILE_DIR:1PhoneMirror>"
+    )
+elseif (ENABLE_ANDROID)
+    message(WARNING
+        "ENABLE_ANDROID is ON but '${CMAKE_SOURCE_DIR}/tools' is missing. "
+        "Android mirroring will fail at runtime until tools/adb/adb.exe and "
+        "tools/scrcpy-server.jar are placed next to the built EXE.")
+endif()

@@ -16,6 +16,14 @@ dist/
 *.o
 *.a
 
+# Vendored runtime helpers (adb + scrcpy-server). These ship next to
+# 1PhoneMirror.exe and are copied into the build output by CMake. The
+# global *.exe / *.dll ignores above would otherwise drop them.
+!tools/
+!tools/**
+!tools/**/*.exe
+!tools/**/*.dll
+
 # vcpkg
 vcpkg_installed/
 
