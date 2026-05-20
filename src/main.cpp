@@ -4,6 +4,7 @@
 #include <opm/network/tcp_server.h>
 #include <opm/airplay/srp_pin.h>
 #include <opm/settings.h>
+#include <opm/media/webcam.h>
 #ifdef ENABLE_ANDROID
 #include <opm/android/scrcpy_receiver.h>
 #endif
@@ -210,6 +211,9 @@ void print_usage(const char* argv0) {
               << "  --android-device <serial>         Force a specific device serial\n"
               << "  --android-jar <path>              Path to scrcpy-server.jar\n"
               << "  --android-adb <path>              Path to adb.exe\n"
+              << "\nDiagnostics:\n"
+              << "  --list-webcams                    List available webcams and exit\n"
+              << "  --srp-self-test                   Run AirPlay SRP6 self-test and exit\n"
               << "  --help             Show this help\n";
 }
 
@@ -283,6 +287,18 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--srp-self-test") {
             bool ok = opm::airplay::srp_pin_self_test();
             return ok ? 0 : 2;
+        } else if (arg == "--list-webcams") {
+            auto cams = opm::media::WebcamCapture::enumerate();
+            if (cams.empty()) {
+                std::cout << "No webcams detected.\n";
+            } else {
+                std::cout << "Detected " << cams.size() << " webcam(s):\n";
+                for (size_t k = 0; k < cams.size(); ++k) {
+                    std::cout << "  [" << k << "] " << cams[k].name << "\n"
+                              << "      id: " << cams[k].id << "\n";
+                }
+            }
+            return 0;
         } else {
             std::cerr << "Unknown option: " << arg << "\n";
             print_usage(argv[0]);
