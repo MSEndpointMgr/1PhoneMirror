@@ -1,7 +1,15 @@
 name: Submit to winget
 
-# Once a GitHub Release is published with the MSI attached, automatically
-# open a PR to microsoft/winget-pkgs updating the package manifest.
+# Once the "Build & Release MSI" workflow finishes successfully on a
+# `v*.*.*` tag (which publishes the GitHub Release with the MSI asset),
+# automatically open a PR to microsoft/winget-pkgs updating the manifest.
+#
+# Why `workflow_run` instead of `release: published`?
+#   GitHub deliberately suppresses downstream workflow triggers for events
+#   fired by the default `GITHUB_TOKEN` (loop prevention). Since release.yml
+#   creates the release with `github.token`, a `release: published` trigger
+#   here would never fire automatically. `workflow_run` is not subject to
+#   that suppression and chains reliably without needing a PAT.
 #
 # REQUIRED ONE-TIME SETUP:
 #   1. Make the FIRST submission manually with `wingetcreate new` so the
@@ -11,8 +19,9 @@ name: Submit to winget
 #   3. (Optional) Fork microsoft/winget-pkgs into your account beforehand;
 #      wingetcreate will reuse it.
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["Build & Release MSI"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       version:
@@ -22,13 +31,20 @@ on:
 jobs:
   publish:
     runs-on: windows-latest
+    # Gate workflow_run trigger: only proceed when the upstream run succeeded
+    # AND was triggered by a `v*.*.*` tag push. `head_branch` on a tag-push
+    # workflow_run carries the tag name (e.g. "v0.5.0").
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
     steps:
       - name: Resolve version + asset URL
         id: ctx
         shell: pwsh
         run: |
-          if ('${{ github.event_name }}' -eq 'release') {
-            $tag = '${{ github.event.release.tag_name }}'
+          if ('${{ github.event_name }}' -eq 'workflow_run') {
+            $tag = '${{ github.event.workflow_run.head_branch }}'
           } else {
             $tag = 'v${{ github.event.inputs.version }}'
           }
@@ -39,8 +55,9 @@ jobs:
           Write-Host "Version: $version"
           Write-Host "URL:     $url"
 
-          # Wait until the public release is reachable (cross-repo publish step
-          # in release.yml races this workflow). Up to 3 minutes.
+          # Wait until the release asset is reachable (the upstream publish
+          # step finishes just before this workflow_run event fires; allow
+          # for CDN propagation). Up to 3 minutes.
           $deadline = (Get-Date).AddMinutes(3)
           while ((Get-Date) -lt $deadline) {
             try {
