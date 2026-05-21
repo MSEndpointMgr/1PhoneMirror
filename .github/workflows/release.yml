@@ -192,7 +192,12 @@ jobs:
       - name: Publish Release to public repo (MSEndpointMgr/1PhoneMirror)
         if: startsWith(github.ref, 'refs/tags/v')
         env:
-          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          # Prefer a dedicated cross-repo token if one is configured (legacy
+          # private-mirror setup); otherwise fall back to the built-in
+          # GITHUB_TOKEN, which has `contents: write` on this repo (granted
+          # by the `permissions:` block above) and works because this
+          # workflow now runs inside MSEndpointMgr/1PhoneMirror itself.
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN || github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
           SHA256: ${{ steps.hash.outputs.sha256 }}
           TAG: ${{ github.ref_name }}
