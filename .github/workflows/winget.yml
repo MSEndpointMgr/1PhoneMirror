@@ -71,7 +71,11 @@ jobs:
           }
 
       - name: Submit manifest via winget-releaser
-        uses: vedantmgoyal9/winget-releaser@main
+        # Pin to the stable @v2 tag rather than @main. The `main` branch
+        # has a Windows path-join bug that constructs the upstream
+        # existence-check URL with a backslash ("manifests/m\Publisher/..."),
+        # which always 404s and aborts the run before any PR is opened.
+        uses: vedantmgoyal9/winget-releaser@v2
         with:
           identifier: MSEndpointMgr.1PhoneMirror
           version: ${{ steps.ctx.outputs.version }}
