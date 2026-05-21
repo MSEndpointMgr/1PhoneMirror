@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(1PhoneMirror VERSION 0.4.1 LANGUAGES C CXX)
+project(1PhoneMirror VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,6 +10,7 @@ option(ENABLE_AIRPLAY "Build AirPlay receiver module" ON)
 option(ENABLE_MIRACAST "Build Miracast receiver module (Windows only)" ON)
 option(ENABLE_CAST "Build Google Cast receiver module" ON)
 option(ENABLE_ANDROID "Build Android (scrcpy-based) screen mirror receiver" ON)
+option(ENABLE_WEBCAM "Build webcam drawer (Media Foundation, Windows only)" ON)
 
 # --- Dependencies via vcpkg or find_package ---
 find_package(PkgConfig QUIET)
@@ -46,6 +47,11 @@ set(MEDIA_SOURCES
 if(WIN32)
     list(APPEND MEDIA_SOURCES src/media/ocr.cpp)
 endif()
+
+# Webcam drawer (always compiled when the option is on so the header
+# resolves; webcam.cpp itself has an #else branch that stubs out the
+# API for non-Windows / disabled builds).
+list(APPEND MEDIA_SOURCES src/media/webcam.cpp)
 
 set(NETWORK_SOURCES
     src/network/tcp_server.cpp
@@ -153,6 +159,12 @@ endif()
 
 if(ENABLE_ANDROID)
     target_compile_definitions(1PhoneMirror PRIVATE ENABLE_ANDROID=1)
+endif()
+
+if(ENABLE_WEBCAM AND WIN32)
+    target_compile_definitions(1PhoneMirror PRIVATE ENABLE_WEBCAM=1)
+    # Media Foundation libs are part of the Windows SDK — no vcpkg dep.
+    target_link_libraries(1PhoneMirror PRIVATE mf mfplat mfreadwrite mfuuid shlwapi)
 endif()
 
 if(WIN32)

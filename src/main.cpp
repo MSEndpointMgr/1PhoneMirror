@@ -4,11 +4,15 @@
 #include <opm/network/tcp_server.h>
 #include <opm/airplay/srp_pin.h>
 #include <opm/settings.h>
+#include <opm/media/webcam.h>
 #ifdef ENABLE_ANDROID
 #include <opm/android/scrcpy_receiver.h>
 #endif
 #include <iostream>
 #include <string>
+#include <chrono>
+#include <fstream>
+#include <thread>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -210,6 +214,10 @@ void print_usage(const char* argv0) {
               << "  --android-device <serial>         Force a specific device serial\n"
               << "  --android-jar <path>              Path to scrcpy-server.jar\n"
               << "  --android-adb <path>              Path to adb.exe\n"
+              << "\nDiagnostics:\n"
+              << "  --list-webcams                    List available webcams and exit\n"
+              << "  --webcam-test [id]                Capture ~3s from a webcam, save first frame as PPM\n"
+              << "  --srp-self-test                   Run AirPlay SRP6 self-test and exit\n"
               << "  --help             Show this help\n";
 }
 
@@ -283,6 +291,85 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--srp-self-test") {
             bool ok = opm::airplay::srp_pin_self_test();
             return ok ? 0 : 2;
+        } else if (arg == "--list-webcams") {
+            auto cams = opm::media::WebcamCapture::enumerate();
+            if (cams.empty()) {
+                std::cout << "No webcams detected.\n";
+            } else {
+                std::cout << "Detected " << cams.size() << " webcam(s):\n";
+                for (size_t k = 0; k < cams.size(); ++k) {
+                    std::cout << "  [" << k << "] " << cams[k].name << "\n"
+                              << "      id: " << cams[k].id << "\n";
+                }
+            }
+            return 0;
+        } else if (arg == "--webcam-test") {
+            // Optional next arg = device id (MF symbolic link). If omitted,
+            // pick the system default. Captures ~3s, then dumps the first
+            // valid frame to %TEMP%\1pm_webcam_test.ppm so the user can
+            // visually confirm capture is working before milestone 3 ships
+            // the in-app preview.
+            std::string id;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                id = argv[++i];
+            }
+            opm::media::WebcamCapture cam;
+            if (!cam.start(id, 1280, 720)) {
+                std::cerr << "Webcam start failed: " << cam.last_error() << "\n";
+                return 2;
+            }
+            std::cout << "Capturing for ~3s...\n";
+
+            opm::media::WebcamFrame frame;
+            bool got = false;
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            int polls = 0, frames = 0;
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (cam.get_latest(frame)) {
+                    if (!got) got = true;
+                    ++frames;
+                }
+                ++polls;
+                std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            }
+            const int neg_w = cam.width();
+            const int neg_h = cam.height();
+            cam.stop();
+
+            std::cout << "Polled " << polls << " times, got "
+                      << frames << " new frame(s). "
+                      << "Negotiated " << neg_w << "x" << neg_h << "\n";
+
+            if (!got || frame.rgba.empty()) {
+                std::cerr << "No frames captured. " << cam.last_error() << "\n";
+                return 3;
+            }
+
+            char temp[MAX_PATH] = {0};
+            DWORD tlen = GetTempPathA(MAX_PATH, temp);
+            std::string out_path = (tlen > 0 ? std::string(temp, tlen)
+                                             : std::string(".\\"))
+                                 + "1pm_webcam_test.ppm";
+            std::ofstream f(out_path, std::ios::binary);
+            if (!f) {
+                std::cerr << "Failed to open " << out_path << " for writing\n";
+                return 4;
+            }
+            // PPM P6 = binary RGB. Drop alpha, three bytes per pixel.
+            f << "P6\n" << frame.width << " " << frame.height << "\n255\n";
+            const size_t pixels = size_t(frame.width) * size_t(frame.height);
+            std::vector<uint8_t> rgb(pixels * 3);
+            for (size_t p = 0; p < pixels; ++p) {
+                rgb[p * 3 + 0] = frame.rgba[p * 4 + 0];
+                rgb[p * 3 + 1] = frame.rgba[p * 4 + 1];
+                rgb[p * 3 + 2] = frame.rgba[p * 4 + 2];
+            }
+            f.write(reinterpret_cast<const char*>(rgb.data()),
+                    (std::streamsize)rgb.size());
+            f.close();
+            std::cout << "Wrote first frame to " << out_path << "\n";
+            return 0;
         } else {
             std::cerr << "Unknown option: " << arg << "\n";
             print_usage(argv[0]);

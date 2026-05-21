@@ -130,6 +130,7 @@ cmake --build . --config Release
 | Key | Action |
 |---|---|
 | `F` | Toggle fullscreen |
+| `W` | Toggle webcam drawer (right-click the `W` button to pick a camera) |
 | `ESC` | Quit |
 
 ## Step 5 — Connect a Device

@@ -52,11 +52,22 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "customEvents | where name == 'Launch' | summarize Launches = count(), Installs = dcount(tostring(customDimensions.install_id)), Versions = dcount(tostring(customDimensions.version))",
+        "query": "let base = customEvents | where name == 'Launch';\nunion\n  (base | summarize Value = count() | extend Metric = 'Launches'),\n  (base | summarize Value = dcount(tostring(customDimensions.install_id)) | extend Metric = 'Distinct installs'),\n  (base | summarize Value = dcount(tostring(customDimensions.version)) | extend Metric = 'Versions seen')\n| project Metric, Value",
         "size": 4,
         "title": "Launches · distinct installs · versions seen",
         "timeContextFromParameter": "TimeRange",
-        "visualization": "tiles"
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": { "columnMatch": "Metric", "formatter": 1 },
+          "leftContent": {
+            "columnMatch": "Value",
+            "formatter": 12,
+            "formatOptions": { "palette": "auto" },
+            "numberFormat": { "unit": 17, "options": { "style": "decimal", "maximumFractionDigits": 0 } }
+          },
+          "showBorder": false,
+          "size": "auto"
+        }
       },
       "name": "tiles-launch"
     },
@@ -64,11 +75,22 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "customEvents | where name == 'Download' | summarize Downloads = count(), Versions = dcount(tostring(customDimensions.version)), Files = dcount(tostring(customDimensions.file))",
+        "query": "let base = customEvents | where name == 'Download';\nunion\n  (base | summarize Value = count() | extend Metric = 'Downloads'),\n  (base | summarize Value = dcount(tostring(customDimensions.version)) | extend Metric = 'Versions'),\n  (base | summarize Value = dcount(tostring(customDimensions.file)) | extend Metric = 'Files')\n| project Metric, Value",
         "size": 4,
         "title": "Downloads via /dl redirector",
         "timeContextFromParameter": "TimeRange",
-        "visualization": "tiles"
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": { "columnMatch": "Metric", "formatter": 1 },
+          "leftContent": {
+            "columnMatch": "Value",
+            "formatter": 12,
+            "formatOptions": { "palette": "auto" },
+            "numberFormat": { "unit": 17, "options": { "style": "decimal", "maximumFractionDigits": 0 } }
+          },
+          "showBorder": false,
+          "size": "auto"
+        }
       },
       "name": "tiles-dl"
     },
@@ -132,7 +154,15 @@
         "title": "Launches by app version",
         "timeContextFromParameter": "TimeRange",
         "visualization": "categoricalbar",
-        "chartSettings": { "xAxis": "Version", "yAxis": ["Launches"], "group": null, "createOtherGroup": null, "showLegend": true }
+        "chartSettings": {
+          "xAxis": "Version",
+          "yAxis": ["Launches"],
+          "group": null,
+          "createOtherGroup": null,
+          "showLegend": true,
+          "showDataLabels": true,
+          "showMetrics": true
+        }
       },
       "name": "launch-by-version"
     },
