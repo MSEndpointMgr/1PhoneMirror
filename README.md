@@ -122,6 +122,7 @@ button on the menu (or use the Windows file dialog) to open it.
 | `A` | Open Android pair / connect dialog |
 | `I` | Toggle info panel |
 | `V` | Toggle version history |
+| `W` | Toggle webcam drawer (slides down from the phone bottom) |
 | `S` | Toggle settings panel (bezel colour, screenshots, recording format) |
 | `Ctrl+S` | Screenshot — save to Pictures folder and/or clipboard (per Settings) |
 | `Ctrl+Shift+S` | Screenshot with annotation tools |
@@ -137,6 +138,8 @@ button on the menu (or use the Windows file dialog) to open it.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **0.5.0** | 21.05.2026 | **Webcam drawer** (`W`) — a landscape camera panel that slides out of the phone's bottom bezel, matching the log panel's drawer style. Lists Media Foundation cameras (right-click the bottom `W` button to pick one), live preview at the camera's native resolution, optional horizontal mirror. Screenshots (`Ctrl+S`) and screen recordings (`Ctrl+R`) capture the phone + webcam as one framed composite — WYSIWYG. In-drawer **screenshot button** (left) saves the webcam frame on its own (`<date> <time> Webcam.png`) and right-edge **camera-switch dots** flip between connected cameras. Crash-guard skips webcam auto-start after a failed launch so a bad camera can't lock the app. Version-history panel (`V`) scrollbar is now click-draggable. |
+| **0.4.2** | 20.05.2026 | New capture file naming convention `<date> <time> <function>` (e.g. `2026-05-20 14-32-07 Screenshot.png`, `2026-05-20 14-32-07 Recording.mp4`) so screenshots and recordings sort chronologically in Explorer. |
 | **0.4.1** | 18.05.2026 | **Open screenshots in Snagit Editor** — new third output toggle alongside *Save to folder* and *Copy to clipboard*. Auto-detects any installed Snagit version (registry + Program Files); shows a warning toast if Snagit isn't installed when enabled. |
 | **0.4.0** | 18.05.2026 | **Multi-device keyboard switcher** (`Ctrl+1`…`Ctrl+9`) jumps between connected phones in the bottom-bezel picker. New **Always keep window on top** setting. AirPlay sources now label as **Apple 1/2/…** instead of *Device 1/2/…*. Tooltip shows the shortcut. |
 | **0.3.9** | 17.05.2026 | Small telemetry in settings. |

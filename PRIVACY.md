@@ -47,12 +47,33 @@ internet requests against systems operated by the maintainer:
 
 - It does not transmit screenshots, recordings, mirrored frames, or
   anything captured from your phone.
+- It does not transmit webcam frames — see *Webcam capture* below.
 - It does not transmit phone identifiers (serial numbers, IMEI, MAC
   addresses, device names) anywhere off your local network.
 - It does not bundle third-party tracking, advertising, or analytics
   SDKs.
 - It does not modify, scan, or collect data from files on your PC
   outside its own settings and screenshot output folders.
+
+## Webcam capture
+
+The webcam drawer (`W`) is **opt-in** and disabled by default. When
+you open it, 1PhoneMirror:
+
+- Enumerates locally-attached cameras through Windows Media Foundation
+  (no network calls).
+- Captures frames from the camera you select and displays them in the
+  drawer panel.
+- Includes the webcam panel in screenshots (`Ctrl+S`) and screen
+  recordings (`Ctrl+R`) **only when the drawer is open at the time the
+  capture starts**, and writes the output to `Pictures\1PhoneMirror\`
+  on your PC.
+- **Never transmits webcam frames over the network.** They are not
+  uploaded, streamed, or included in the launch ping.
+- **Does not capture microphone audio.** Only the camera's video
+  stream is read.
+
+Close the drawer (press `W` again) to stop capturing immediately.
 
 ## Files written on your PC
 

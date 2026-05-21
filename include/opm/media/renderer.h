@@ -3,6 +3,7 @@
 #include <opm/media/decoder.h>
 #include <opm/media/phone_frame.h>
 #include <opm/media/recorder.h>
+#include <opm/media/webcam.h>
 #include <opm/settings.h>
 #include <atomic>
 #include <chrono>
@@ -166,6 +167,7 @@ private:
     // canvas-change branch keeps the old frame and letterboxes).
     bool source_just_switched_ = false;
     int  window_shape_last_lp_w_ = -1; // pixel width of drawer region when last applied
+    int  window_shape_last_wc_h_ = -1; // pixel height of webcam drawer when last applied
     int  window_shape_last_frame_w_ = -1;
     int  window_shape_last_frame_x_ = -1;
     int  window_shape_last_frame_y_ = -1;
@@ -247,8 +249,14 @@ private:
     bool tooltip_ready(const std::string& key);
     // Draw a small tooltip pill near (anchor_x, anchor_y). The tip is drawn
     // above the anchor unless it would clip the window top.
+    // h_align: 0 = centered on anchor_x (default), 1 = right edge at anchor_x
+    //          (tooltip extends to the LEFT of the anchor), 2 = left edge at
+    //          anchor_x (tooltip extends to the RIGHT of the anchor).
+    // v_align: 0 = use prefer_below (default), 1 = vertically centered on
+    //          anchor_y (ignores prefer_below).
     void draw_bezel_tooltip(const std::string& text, int anchor_x, int anchor_y,
-                            bool prefer_below = false);
+                            bool prefer_below = false, int h_align = 0,
+                            int v_align = 0);
     SDL_Texture* bezel_tip_tex_ = nullptr;
     int bezel_tip_w_ = 0, bezel_tip_h_ = 0;
     std::string bezel_tip_str_;
@@ -346,6 +354,12 @@ private:
     BtnRect version_panel_rect_;
     std::vector<InfoLine> version_lines_;
     int version_scroll_offset_ = 0;
+    // Scrollbar drag state (mirrors the log-panel scrollbar pattern).
+    bool version_scrollbar_dragging_ = false;
+    int version_sb_x_ = 0, version_sb_w_ = 0;
+    int version_sb_track_y_ = 0, version_sb_track_h_ = 0;
+    int version_sb_thumb_h_ = 0;
+    int version_sb_max_scroll_ = 0;
     void draw_version_panel();
 
     // Settings panel (gear icon in island)
@@ -363,6 +377,8 @@ private:
     BtnRect settings_toggle_compname_btn_;
     BtnRect settings_toggle_aot_btn_;
     BtnRect settings_toggle_telemetry_btn_;
+    BtnRect settings_toggle_webcam_mirror_btn_;
+    BtnRect settings_toggle_webcam_record_btn_;
     // Session-only toggle: when on, std::cout is mirrored to
     // <screenshot_dir>/1PhoneMirror.log. Reset to false on every launch
     // (intentionally NOT persisted to settings.ini).
@@ -431,6 +447,99 @@ private:
     int log_sb_thumb_h_ = 0;
     int log_sb_max_scroll_ = 0;
     void draw_log_panel();
+
+    // Webcam drawer (TODO.md #9). Geometry mirrors the log panel rotated
+    // 90 degrees: anchored to the bottom edge of the phone frame, inset
+    // horizontally so it starts inside the bezel corner curves, with
+    // rounded bottom-left/bottom-right corners. The toggle button lives
+    // in the bottom bezel and uses the same glyph as the menu chevron at
+    // top (horizontal bar when closed, downward chevron when open).
+    WebcamCapture webcam_;
+    SDL_Texture*  webcam_texture_ = nullptr;
+    int  webcam_tex_w_ = 0, webcam_tex_h_ = 0;
+    // Cleared after the first valid frame arrives; used together with
+    // Settings::set_webcam_pending() so a crash inside the capture stack
+    // disables the auto-open path on the next launch.
+    bool webcam_pending_cleared_  = true;
+    bool webcam_drawer_visible_   = false;
+    bool webcam_drawer_animating_ = false;
+    float webcam_drawer_anim_     = 0.0f; // 0=hidden, 1=fully visible
+    std::chrono::steady_clock::time_point webcam_drawer_anim_start_;
+    int  webcam_drawer_full_h_ = 0;       // dynamic full-open height (px)
+    // Drawer height we have already grown the WINDOW to accommodate.
+    // Layout code grows/shrinks the window by the delta vs the current
+    // target so the phone keeps its size and the drawer hangs below it,
+    // matching the way the log panel grows the window horizontally.
+    int  webcam_drawer_h_applied_ = 0;
+    BtnRect webcam_btn_;                  // bottom bezel toggle
+    // In-drawer controls (laid out inside the inner content rect each
+    // frame so they auto-track resizes). Updated by draw_webcam_drawer(),
+    // consumed by the SDL_MOUSEBUTTONDOWN handler.
+    BtnRect webcam_shot_btn_;             // left rail: save webcam-only PNG
+    std::vector<std::pair<std::string /*device_id*/, BtnRect>>
+        webcam_cam_btns_;                 // right rail: one dot per camera
+    // True once init() has finished applying settings_.webcam_drawer_open;
+    // prevents render_frame() from spawning the capture worker before the
+    // window is on screen.
+    bool webcam_settings_applied_ = false;
+    void toggle_webcam_drawer();
+    void draw_webcam_drawer();
+    // Write the latest webcam frame to disk as <ts>_webcam.png in the
+    // user's screenshot folder. Honours settings_.webcam_mirror_h so the
+    // saved image matches what the user sees on screen. No-op when no
+    // frame is available; surfaces success/failure via the toast.
+    void save_webcam_screenshot();
+
+    // Tooltip text scheduled by a panel that renders early in the frame
+    // (e.g. the webcam drawer) so the bubble can be painted on top of
+    // anything that draws over the panel later in the same render pass.
+    // Cleared at the start of every render_frame().
+    std::string pending_tooltip_text_;
+    int         pending_tooltip_x_     = 0;
+    int         pending_tooltip_y_     = 0;
+    bool        pending_tooltip_below_ = false;
+    int         pending_tooltip_align_ = 0; // 0=center,1=right-of-anchor,2=left-of-anchor
+    int         pending_tooltip_valign_ = 0; // 0=above/below per prefer_below, 1=centered on anchor_y
+    // Poll the capture worker once per render tick: refresh the texture
+    // used by the drawer AND keep an RGBA CPU copy that the recorder
+    // composite path can read.
+    void poll_webcam_frame();
+
+    // True when a screenshot / recording composite should grow the
+    // canvas downwards to include the webcam strip. Mirrors what the
+    // user sees on screen — drawer must be visible AND we must have a
+    // webcam frame to draw.
+    bool should_include_webcam_in_capture() const;
+    // Paints the webcam strip onto an already-allocated RGBA canvas.
+    // Caller has filled rows [0, base_h) with the phone composite and
+    // sized the canvas to (canvas_w x (base_h + panel_h)). The strip
+    // is filled with drawer body colour and the latest webcam frame is
+    // letterboxed into the inset (mirrored if settings request it).
+    // `overlap_top` is the number of rows at the top of the strip that
+    // sit BEHIND the phone bezel — they're filled full-width with the
+    // drawer body colour so the phone's rounded bottom-corner cutouts
+    // bleed through the matte instead of showing as transparent gaps
+    // once the phone composite is alpha-blended on top.
+    void paint_webcam_strip(uint8_t* canvas, int canvas_w,
+                            int base_h, int panel_h,
+                            int overlap_top = 0) const;
+
+    // CPU-side copy of the freshest webcam frame (RGBA, tightly packed).
+    // Lives independently of webcam_texture_ so recording works even when
+    // the drawer is closed mid-recording.
+    std::vector<uint8_t> webcam_last_rgba_;
+    int webcam_last_w_ = 0;
+    int webcam_last_h_ = 0;
+
+    // Snapshot of webcam recording intent captured in start_recording().
+    // The encoder dimensions are fixed for the lifetime of a single
+    // recording, so we cannot start/stop the panel mid-clip — this flag
+    // and the panel height are locked at start time.
+    bool recording_with_webcam_     = false;
+    int  recording_webcam_panel_h_  = 0;
+    int  recording_canvas_w_        = 0;  // base composite width (== cfg.width when no scaling)
+    int  recording_canvas_h_base_   = 0;  // phone composite height (top portion)
+    int  recording_webcam_overlap_  = 0;  // rows the strip tucks behind the phone bezel
 
     // Frame position
     int frame_dst_x_ = 0, frame_dst_y_ = 0;

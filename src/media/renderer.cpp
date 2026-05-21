@@ -297,6 +297,105 @@ static SDL_Texture* make_text_texture_w(SDL_Renderer* renderer, const std::wstri
     return tex;
 }
 
+// Word-wrapped version of make_text_texture_w. Lays out `text` inside a
+// box no wider than `max_pixel_width` using DrawTextW(DT_WORDBREAK) and
+// returns a single texture covering all wrapped lines. Used for the
+// description rows in the Version History panel so long blurbs reflow
+// instead of being shrunk to fit on one line.
+static SDL_Texture* make_text_texture_w_wrapped(SDL_Renderer* renderer,
+                                                const std::wstring& text,
+                                                int font_height,
+                                                uint8_t cr, uint8_t cg, uint8_t cb,
+                                                int max_pixel_width,
+                                                int* out_w, int* out_h,
+                                                const wchar_t* font_name = L"Segoe UI") {
+    if (text.empty() || max_pixel_width <= 0) return nullptr;
+    HDC hdc = CreateCompatibleDC(nullptr);
+    if (!hdc) return nullptr;
+
+    HFONT font = CreateFontW(
+        -font_height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_NATURAL_QUALITY, DEFAULT_PITCH | FF_SWISS, font_name);
+    HFONT old_font = (HFONT)SelectObject(hdc, font);
+
+    // CALCRECT lays out wrapped text and returns the bounding box of the
+    // longest line. DrawText may modify its buffer, so work on a mutable
+    // copy. We measure without DT_CENTER so the returned width matches the
+    // longest wrapped line (DT_CENTER + DT_CALCRECT can return the full
+    // input width on some Windows versions), then draw with DT_CENTER so
+    // any shorter continuation lines are centred inside that box. The
+    // Version panel centres the whole texture again at draw time, so this
+    // makes every wrapped line render centred.
+    std::wstring buf = text;
+    RECT rc = {0, 0, max_pixel_width, 0};
+    DrawTextW(hdc, buf.data(), (int)buf.size(), &rc,
+              DT_WORDBREAK | DT_NOPREFIX | DT_LEFT | DT_CALCRECT);
+    UINT fmt = DT_WORDBREAK | DT_NOPREFIX | DT_CENTER;
+    int w = rc.right - rc.left;
+    int h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) {
+        SelectObject(hdc, old_font); DeleteObject(font); DeleteDC(hdc);
+        return nullptr;
+    }
+    // Right-pad for glyph overhang (same rationale as the single-line path).
+    {
+        TEXTMETRICW tm;
+        if (GetTextMetricsW(hdc, &tm)) w += tm.tmOverhang;
+        w += (font_height + 3) / 4;
+    }
+
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = w;
+    bmi.bmiHeader.biHeight = -h;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+
+    void* bits = nullptr;
+    HBITMAP hbm = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!hbm) {
+        SelectObject(hdc, old_font); DeleteObject(font); DeleteDC(hdc);
+        return nullptr;
+    }
+    HBITMAP old_bm = (HBITMAP)SelectObject(hdc, hbm);
+
+    memset(bits, 0, w * h * 4);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(255, 255, 255));
+    RECT draw_rc = {0, 0, w, h};
+    DrawTextW(hdc, buf.data(), (int)buf.size(), &draw_rc, fmt);
+    GdiFlush();
+
+    auto* src = static_cast<uint8_t*>(bits);
+    std::vector<uint8_t> rgba(w * h * 4);
+    for (int i = 0; i < w * h; i++) {
+        uint8_t b = src[i * 4 + 0], g = src[i * 4 + 1], r = src[i * 4 + 2];
+        uint8_t alpha = (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
+        rgba[i * 4 + 0] = cr;
+        rgba[i * 4 + 1] = cg;
+        rgba[i * 4 + 2] = cb;
+        rgba[i * 4 + 3] = alpha;
+    }
+
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "best");
+    SDL_Texture* tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32,
+                                          SDL_TEXTUREACCESS_STATIC, w, h);
+    if (tex) {
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+        SDL_UpdateTexture(tex, nullptr, rgba.data(), w * 4);
+    }
+    *out_w = w;
+    *out_h = h;
+
+    SelectObject(hdc, old_bm);
+    SelectObject(hdc, old_font);
+    DeleteObject(hbm);
+    DeleteObject(font);
+    DeleteDC(hdc);
+    return tex;
+}
+
 // Cheap GDI text measurement (no texture creation). Includes the same
 // overhang/ClearType padding used by make_text_texture so the result matches
 // what will actually be rasterised.
@@ -433,6 +532,35 @@ static SDL_Texture* create_android_icon(SDL_Renderer* renderer, int sz,
     return tex;
 }
 
+// Alpha-blend the phone-bezel composite ON TOP of an already-painted
+// destination canvas. Used by the webcam-strip capture/recording path
+// to tuck the strip up behind the phone's rounded bottom bezel — the
+// strip is painted first at `base_h - overlap`, then the phone bezel
+// is composited over the first `phone_h` rows of the canvas. Where the
+// bezel is opaque it hides the underlying strip; where the bezel's
+// rounded-corner cutouts are transparent the drawer body bleeds through.
+static inline void blit_phone_over_strip(uint8_t* dst, int dst_stride,
+                                         const uint8_t* phone, int phone_stride,
+                                         int phone_w, int phone_h) {
+    for (int y = 0; y < phone_h; ++y) {
+        const uint8_t* sp = phone + (size_t)y * phone_stride;
+        uint8_t* dp = dst + (size_t)y * dst_stride;
+        for (int x = 0; x < phone_w; ++x, sp += 4, dp += 4) {
+            uint8_t a = sp[3];
+            if (a == 0) continue;
+            if (a == 255) {
+                dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2]; dp[3] = 255;
+            } else {
+                int ia = 255 - a;
+                dp[0] = (uint8_t)((sp[0] * a + dp[0] * ia) / 255);
+                dp[1] = (uint8_t)((sp[1] * a + dp[1] * ia) / 255);
+                dp[2] = (uint8_t)((sp[2] * a + dp[2] * ia) / 255);
+                dp[3] = (uint8_t)std::max<int>(dp[3], a);
+            }
+        }
+    }
+}
+
 namespace opm::media {
 
 Renderer::Renderer() = default;
@@ -475,6 +603,41 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
     settings_ = opm::Settings::load();
     phone_frame_.set_bezel_color(settings_.bezel_r, settings_.bezel_g, settings_.bezel_b);
     SDL_SetWindowAlwaysOnTop(window_, settings_.always_on_top ? SDL_TRUE : SDL_FALSE);
+
+#ifdef ENABLE_WEBCAM
+    // Restore previous drawer state without re-saving. Start the capture
+    // worker in a detached thread so MF initialization never blocks the
+    // first frame of UI.
+    if (settings_.webcam_drawer_open) {
+        // Crash guard: if the previous launch did not get past the first
+        // webcam frame, the marker file from that run is still present.
+        // Assume the persisted device is the culprit and disable the
+        // auto-open path so the user can reopen the app and pick another
+        // camera (or just keep the drawer closed).
+        if (opm::Settings::webcam_pending_exists()) {
+            std::cerr << "[Webcam] Previous launch did not finish the webcam start path; "
+                         "disabling auto-open and clearing saved device.\n";
+            settings_.webcam_drawer_open = false;
+            settings_.webcam_device_id.clear();
+            settings_.save();
+            opm::Settings::clear_webcam_pending();
+        } else {
+            webcam_drawer_visible_ = true;
+            webcam_drawer_anim_    = 1.0f;
+            std::string dev = settings_.webcam_device_id;
+            opm::Settings::set_webcam_pending();
+            webcam_pending_cleared_ = false;
+            std::thread([this, dev]() {
+                if (!webcam_.start(dev, 1280, 720)) {
+                    std::cerr << "[Webcam] start failed: "
+                              << webcam_.last_error() << "\n";
+                    opm::Settings::clear_webcam_pending();
+                    webcam_pending_cleared_ = true;
+                }
+            }).detach();
+        }
+    }
+#endif
 
     phone_frame_.generate(sdl_renderer_, 390, 844);
 
@@ -588,9 +751,14 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
                                      "https://buymeacoffee.com/simonskothn",
                                      "Buy me a coffee",
                                      L"Segoe UI Symbol"));
-        // Line 3: " · v0.4.0" — broken onto its own line so the second
-        // line stays a comfortable width on narrow phone aspects.
-        footer_line3_.push_back(seg(L"v0.4.1", 100, 100, 100,
+        // Line 3: " · v<version>" — broken onto its own line so the second
+        // line stays a comfortable width on narrow phone aspects. Version
+        // string is built at runtime from OPM_VERSION_* (set by CMake) so
+        // the displayed number always matches the built binary.
+        std::wstring ver_w = L"v" + std::to_wstring(OPM_VERSION_MAJOR) +
+                              L"." + std::to_wstring(OPM_VERSION_MINOR) +
+                              L"." + std::to_wstring(OPM_VERSION_PATCH);
+        footer_line3_.push_back(seg(ver_w.c_str(), 100, 100, 100,
                                      "", "Version history (V)"));
 
         // Mirror the same content for the Info panel, but baked at the
@@ -620,7 +788,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
                                            "https://buymeacoffee.com/simonskothn",
                                            "Buy me a coffee",
                                            L"Segoe UI Symbol"));
-        info_footer_line3_.push_back(iseg(L"v0.4.1", 130, 130, 130,
+        info_footer_line3_.push_back(iseg(ver_w.c_str(), 130, 130, 130,
                                            "", "Version history (V)"));
     }
 #endif
@@ -634,11 +802,15 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
             line.tex = make_text_texture_w(sdl_renderer_, text, font_sz, r, g, b, &line.w, &line.h);
             return line;
         };
-        info_lines_.push_back(make_info(L"1PhoneMirror v0.4.1", 44, 255, 255, 255));
+        std::wstring info_title = L"1PhoneMirror " +
+                                  (L"v" + std::to_wstring(OPM_VERSION_MAJOR) +
+                                   L"." + std::to_wstring(OPM_VERSION_MINOR) +
+                                   L"." + std::to_wstring(OPM_VERSION_PATCH));
+        info_lines_.push_back(make_info(info_title.c_str(), 44, 255, 255, 255));
         info_lines_.push_back(make_info(L"AirPlay (iOS) \u00B7 scrcpy (Android)", 34, 160, 160, 160));
         info_lines_.push_back({nullptr, 0, 0}); // spacer
         info_lines_.push_back(make_info(L"(F) Fullscreen \u00B7 (M) Menu \u00B7 (L) Log \u00B7 (A) Add Android", 30, 130, 130, 130));
-        info_lines_.push_back(make_info(L"(I) Info \u00B7 (V) Version \u00B7 (S) Settings \u00B7 (Esc) Quit", 30, 130, 130, 130));
+        info_lines_.push_back(make_info(L"(I) Info \u00B7 (V) Version \u00B7 (S) Settings \u00B7 (W) Webcam \u00B7 (Esc) Quit", 30, 130, 130, 130));
         info_lines_.push_back(make_info(L"(Ctrl+S) Screenshot \u00B7 (Ctrl+Shift+S) Annotate", 30, 130, 130, 130));
 #ifdef _WIN32
         info_lines_.push_back(make_info(L"(Ctrl+Shift+T) OCR copy text from a region", 30, 130, 130, 130));
@@ -669,83 +841,101 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
             line.tex = make_text_texture_w(sdl_renderer_, text, font_sz, r, g, b, &line.w, &line.h);
             return line;
         };
+        // Wrap width for description rows. Picked so that at the panel's
+        // default text scale (0.5) the displayed line width fits the
+        // narrowest realistic panel without further auto-shrinking, but
+        // is wide enough that short descriptions never wrap.
+        constexpr int kVerWrapW = 720;
+        auto make_desc = [&](const std::wstring& text) -> InfoLine {
+            InfoLine line;
+            line.tex = make_text_texture_w_wrapped(sdl_renderer_, text, 30,
+                                                    160, 160, 160, kVerWrapW,
+                                                    &line.w, &line.h);
+            return line;
+        };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
+        version_lines_.push_back(make_ver(L"21.05.2026 \u2013 0.5.0", 34, 200, 200, 255));
+        version_lines_.push_back(make_desc(L"Webcam drawer (W): slide-out camera panel, WYSIWYG screenshots/recording"));
+        version_lines_.push_back({nullptr, 0, 0});
+        version_lines_.push_back(make_ver(L"20.05.2026 \u2013 0.4.2", 34, 200, 200, 255));
+        version_lines_.push_back(make_desc(L"Capture files renamed to <date> <time> <function> for chronological sorting"));
+        version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"18.05.2026 \u2013 0.4.1", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Open screenshots directly in Snagit Editor (new Settings toggle)", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Open screenshots directly in Snagit Editor (new Settings toggle)"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"18.05.2026 \u2013 0.4.0", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Multi-device shortcuts (Ctrl+1\u20139), always-on-top, Apple naming", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Multi-device shortcuts (Ctrl+1\u20139), always-on-top, Apple naming"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"17.05.2026 \u2013 0.3.9", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Small telemetry in settings", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Small telemetry in settings"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"16.05.2026 \u2013 0.3.8", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Tuned for larger screens from macOS", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Tuned for larger screens from macOS"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"15.05.2026 \u2013 0.3.7", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Copy text from the phone screen (Ctrl+Shift+T)", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Copy text from the phone screen (Ctrl+Shift+T)"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"14.05.2026 \u2013 0.3.6", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Screenshot annotation tools (Ctrl+Shift+S)", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Screenshot annotation tools (Ctrl+Shift+S)"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"13.05.2026 \u2013 0.3.5", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Version check and UI tunings", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Version check and UI tunings"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"13.05.2026 \u2013 0.3.4", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"New Android discovery routine for easy connect", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"New Android discovery routine for easy connect"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"12.05.2026 \u2013 0.3.3", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Right-click resize grip to reset to default size", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Right-click resize grip to reset to default size"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"11.05.2026 \u2013 0.3.2", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"User interface fixes", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"User interface fixes"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"10.05.2026 \u2013 0.3.1", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Phone frame on recordings (rounded corners, transparent on GIF)", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Phone frame on recordings (rounded corners, transparent on GIF)"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"10.05.2026 \u2013 0.3.0", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Screen recording: MP4/GIF, Ctrl+R, right-click for delay/timed", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Screen recording: MP4/GIF, Ctrl+R, right-click for delay/timed"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"09.05.2026 \u2013 0.2.5", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Info panel: copy network test PowerShell script (with MDM check)", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Info panel: copy network test PowerShell script (with MDM check)"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"08.05.2026 \u2013 0.2.4", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Refined bezel toggles and auto-collapse on connect", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Refined bezel toggles and auto-collapse on connect"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"08.05.2026 \u2013 0.2.3", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Better Android experience and quicker screenshots", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Better Android experience and quicker screenshots"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"08.05.2026 \u2013 0.2.2", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Settings: identify as computer name on the network", 30, 160, 160, 160));
-        version_lines_.push_back(make_ver(L"Bezel device dots show play/pause icon per source", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Settings: identify as computer name on the network"));
+        version_lines_.push_back(make_desc(L"Bezel device dots show play/pause icon per source"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"07.05.2026 \u2013 0.2.1", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Settings panel (S): bezel colour + screenshot options", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Settings panel (S): bezel colour + screenshot options"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.2.0", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Android mirroring (Wireless debugging, press A)", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Android mirroring (Wireless debugging, press A)"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.1.6", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Multiple iOS devices stay paired, switch from bezel dots", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Multiple iOS devices stay paired, switch from bezel dots"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.1.5", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"AirPlay PIN pairing for trusted-device security", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"AirPlay PIN pairing for trusted-device security"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"06.05.2026 \u2013 0.1.4", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Slide-out log viewer with live filtering (press L)", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Slide-out log viewer with live filtering (press L)"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"05.05.2026 \u2013 0.1.2", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Dynamic island menu in top bezel for quick actions", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Dynamic island menu in top bezel for quick actions"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"05.05.2026 \u2013 0.1.1", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Screenshot capture to clipboard and Pictures folder", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Screenshot capture to clipboard and Pictures folder"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"05.05.2026 \u2013 0.1.0", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"iOS AirPlay support", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"iOS AirPlay support"));
         version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"04.05.2026 \u2013 0.0.5", 34, 200, 200, 255));
-        version_lines_.push_back(make_ver(L"Initial ideas and implementation", 30, 160, 160, 160));
+        version_lines_.push_back(make_desc(L"Initial ideas and implementation"));
     }
 #endif
 
@@ -977,6 +1167,9 @@ void Renderer::run() {
                     log_panel_visible_ = !log_panel_visible_;
                     log_panel_animating_ = true;
                     log_panel_anim_start_ = std::chrono::steady_clock::now();
+                }
+                if (event.key.keysym.sym == SDLK_w) {
+                    toggle_webcam_drawer();
                 }
                 if (event.key.keysym.sym == SDLK_m) {
                     island_visible_ = !island_visible_;
@@ -1300,6 +1493,10 @@ void Renderer::run() {
                                in_rect(mx, my, resize_grip_.x, resize_grip_.y,
                                        resize_grip_.w, resize_grip_.h)) {
                         target = "resize";
+                    } else if (webcam_btn_.w > 0 &&
+                               in_rect(mx, my, webcam_btn_.x, webcam_btn_.y,
+                                       webcam_btn_.w, webcam_btn_.h)) {
+                        target = "webcam";
                     } else {
                         for (auto& [id, r] : source_btns_) {
                             if (r.w > 0 && in_rect(mx, my, r.x, r.y, r.w, r.h)) {
@@ -1410,6 +1607,45 @@ void Renderer::run() {
                                 }
                             } else if (tgt == "resize" && clicked_action == "reset_size") {
                                 reset_window_to_default_size();
+                            } else if (tgt == "webcam") {
+#ifdef ENABLE_WEBCAM
+                                if (clicked_action.rfind("wc:", 0) == 0) {
+                                    std::string new_id = clicked_action.substr(3);
+                                    if (new_id != settings_.webcam_device_id) {
+                                        settings_.webcam_device_id = new_id;
+                                        settings_.save();
+                                        bool was_running = webcam_.is_running();
+                                        bool keep_open   = webcam_drawer_visible_;
+                                        std::thread([this, new_id, was_running, keep_open]() {
+                                            if (was_running) {
+                                                webcam_.stop();
+                                                opm::Settings::clear_webcam_pending();
+                                            }
+                                            if (keep_open) {
+                                                opm::Settings::set_webcam_pending();
+                                                webcam_pending_cleared_ = false;
+                                                if (!webcam_.start(new_id, 1280, 720)) {
+                                                    std::cerr << "[Webcam] start failed: "
+                                                              << webcam_.last_error() << "\n";
+                                                    opm::Settings::clear_webcam_pending();
+                                                    webcam_pending_cleared_ = true;
+                                                }
+                                            }
+                                        }).detach();
+                                    }
+                                } else if (clicked_action == "mirror_on" ||
+                                           clicked_action == "mirror_off") {
+                                    settings_.webcam_mirror_h =
+                                        (clicked_action == "mirror_on");
+                                    settings_.save();
+                                } else if (clicked_action == "show" ||
+                                           clicked_action == "hide") {
+                                    bool want_visible = (clicked_action == "show");
+                                    if (want_visible != webcam_drawer_visible_) {
+                                        toggle_webcam_drawer();
+                                    }
+                                }
+#endif
                             } else if (tgt == "record") {
                                 if (clicked_action == "start") {
                                     pending_record_duration_sec_ = 0;
@@ -1568,6 +1804,62 @@ void Renderer::run() {
                         break;
                     }
 
+                    // Webcam drawer toggle (bottom bezel chevron)
+                    if (webcam_btn_.w > 0 &&
+                        in_rect(mx, my, webcam_btn_.x, webcam_btn_.y,
+                                webcam_btn_.w, webcam_btn_.h)) {
+                        toggle_webcam_drawer();
+                        break;
+                    }
+
+#ifdef ENABLE_WEBCAM
+                    // In-drawer screenshot button (left rail) — saves
+                    // just the camera frame to "<date> <time> Webcam.png".
+                    if (webcam_drawer_visible_ && webcam_shot_btn_.w > 0 &&
+                        in_rect(mx, my, webcam_shot_btn_.x, webcam_shot_btn_.y,
+                                webcam_shot_btn_.w, webcam_shot_btn_.h)) {
+                        save_webcam_screenshot();
+                        btn_flash_ = true;
+                        btn_flash_start_ = std::chrono::steady_clock::now();
+                        break;
+                    }
+                    // In-drawer camera switch dots (right rail) — click
+                    // a dot to make that camera active.
+                    if (webcam_drawer_visible_) {
+                        bool handled = false;
+                        for (auto& [dev_id, r] : webcam_cam_btns_) {
+                            if (r.w > 0 && in_rect(mx, my, r.x, r.y, r.w, r.h)) {
+                                if (dev_id != settings_.webcam_device_id) {
+                                    settings_.webcam_device_id = dev_id;
+                                    settings_.save();
+                                    bool was_running = webcam_.is_running();
+                                    bool keep_open   = webcam_drawer_visible_;
+                                    std::string new_id = dev_id;
+                                    std::thread([this, new_id, was_running, keep_open]() {
+                                        if (was_running) {
+                                            webcam_.stop();
+                                            opm::Settings::clear_webcam_pending();
+                                        }
+                                        if (keep_open) {
+                                            opm::Settings::set_webcam_pending();
+                                            webcam_pending_cleared_ = false;
+                                            if (!webcam_.start(new_id, 1280, 720)) {
+                                                std::cerr << "[Webcam] start failed: "
+                                                          << webcam_.last_error() << "\n";
+                                                opm::Settings::clear_webcam_pending();
+                                                webcam_pending_cleared_ = true;
+                                            }
+                                        }
+                                    }).detach();
+                                }
+                                handled = true;
+                                break;
+                            }
+                        }
+                        if (handled) break;
+                    }
+#endif
+
                     // Icon button toggle (info panel)
                     if (icon_btn_.w > 0 &&
                         in_rect(mx, my, icon_btn_.x, icon_btn_.y,
@@ -1722,6 +2014,18 @@ void Renderer::run() {
                                 settings_.telemetry_enabled = !settings_.telemetry_enabled;
                                 settings_.save();
                             }
+                            if (settings_toggle_webcam_mirror_btn_.w > 0 &&
+                                in_rect(mx, my, settings_toggle_webcam_mirror_btn_.x, settings_toggle_webcam_mirror_btn_.y,
+                                        settings_toggle_webcam_mirror_btn_.w, settings_toggle_webcam_mirror_btn_.h)) {
+                                settings_.webcam_mirror_h = !settings_.webcam_mirror_h;
+                                settings_.save();
+                            }
+                            if (settings_toggle_webcam_record_btn_.w > 0 &&
+                                in_rect(mx, my, settings_toggle_webcam_record_btn_.x, settings_toggle_webcam_record_btn_.y,
+                                        settings_toggle_webcam_record_btn_.w, settings_toggle_webcam_record_btn_.h)) {
+                                settings_.webcam_include_in_recording = !settings_.webcam_include_in_recording;
+                                settings_.save();
+                            }
                             if (in_rect(mx, my, settings_toggle_log_btn_.x, settings_toggle_log_btn_.y,
                                         settings_toggle_log_btn_.w, settings_toggle_log_btn_.h)) {
                                 log_to_file_session_ = !log_to_file_session_;
@@ -1865,6 +2169,23 @@ void Renderer::run() {
                     }
                     // Dismiss version panel on click outside its rect.
                     if (version_panel_visible_ && version_panel_anim_ >= 1.0f) {
+                        // First chance: handle a click on the scrollbar so the
+                        // user can grab the thumb (or click on the track to
+                        // jump) instead of being limited to the mouse wheel.
+                        if (version_sb_track_h_ > 0 && version_sb_max_scroll_ > 0) {
+                            int sb_hit_w = version_sb_w_ + 12; // generous hit area
+                            if (mx >= version_sb_x_ - sb_hit_w / 2 &&
+                                mx <= version_sb_x_ + version_sb_w_ + sb_hit_w / 2 &&
+                                my >= version_sb_track_y_ &&
+                                my <= version_sb_track_y_ + version_sb_track_h_) {
+                                version_scrollbar_dragging_ = true;
+                                float frac = (float)(my - version_sb_track_y_ - version_sb_thumb_h_ / 2) /
+                                             (float)std::max(1, version_sb_track_h_ - version_sb_thumb_h_);
+                                frac = std::max(0.0f, std::min(1.0f, frac));
+                                version_scroll_offset_ = (int)(frac * version_sb_max_scroll_);
+                                break;
+                            }
+                        }
                         if (!in_rect(mx, my, version_panel_rect_.x, version_panel_rect_.y,
                                      version_panel_rect_.w, version_panel_rect_.h)) {
                             version_panel_visible_ = false;
@@ -1908,6 +2229,13 @@ void Renderer::run() {
                                  (float)(log_sb_track_h_ - log_sb_thumb_h_);
                     frac = std::max(0.0f, std::min(1.0f, frac));
                     log_scroll_offset_ = (int)(frac * log_sb_max_scroll_);
+                } else if (version_scrollbar_dragging_ &&
+                           version_sb_track_h_ > 0 && version_sb_max_scroll_ > 0) {
+                    int my = event.motion.y;
+                    float frac = (float)(my - version_sb_track_y_ - version_sb_thumb_h_ / 2) /
+                                 (float)std::max(1, version_sb_track_h_ - version_sb_thumb_h_);
+                    frac = std::max(0.0f, std::min(1.0f, frac));
+                    version_scroll_offset_ = (int)(frac * version_sb_max_scroll_);
                 } else if (resizing_ && phone_frame_.frame_width() > 0) {
                     int gmx, gmy;
                     SDL_GetGlobalMouseState(&gmx, &gmy);
@@ -1947,6 +2275,7 @@ void Renderer::run() {
                 if (event.button.button == SDL_BUTTON_LEFT) {
                     if (resizing_) resizing_ = false;
                     if (log_scrollbar_dragging_) log_scrollbar_dragging_ = false;
+                    if (version_scrollbar_dragging_) version_scrollbar_dragging_ = false;
                     if (android_help_dragging_) android_help_dragging_ = false;
                 }
                 break;
@@ -2206,6 +2535,56 @@ void Renderer::render_frame() {
     frame_dst_w_ = (int)(fw * scale);
     frame_dst_h_ = (int)(fh * scale);
 
+    // Animate webcam drawer (matches log-panel easing for consistency).
+    if (webcam_drawer_animating_) {
+        float elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - webcam_drawer_anim_start_).count() / 1000.0f;
+        float duration = 260.0f; // ms
+        float t = std::min(1.0f, elapsed / duration);
+        float eased = (t < 0.5f)
+                          ? 4.0f * t * t * t
+                          : 1.0f - std::pow(-2.0f * t + 2.0f, 3.0f) * 0.5f;
+        webcam_drawer_anim_ = webcam_drawer_visible_ ? eased : (1.0f - eased);
+        if (t >= 1.0f) {
+            webcam_drawer_animating_ = false;
+            webcam_drawer_anim_ = webcam_drawer_visible_ ? 1.0f : 0.0f;
+        }
+    }
+
+    // Webcam drawer geometry. The drawer body is inset horizontally so it
+    // starts INSIDE the bezel corner curves (matches the design directive
+    // "start within the corner curve"). Height is derived from the inset
+    // width as a 16:9 letterbox so a typical 1280x720 webcam fills the
+    // drawer without distortion.
+    //
+    // Layout strategy (mirrors how the log panel grows the window WIDTH):
+    //   * The phone keeps its size — it never shrinks just because the
+    //     drawer is open.
+    //   * The window GROWS vertically by exactly the drawer height.
+    //   * We track `webcam_drawer_h_applied_` (the drawer area we've
+    //     already grown the window to hold) and compensate by the delta
+    //     each frame so animation ticks don't fight with user-initiated
+    //     window resizes.
+    //
+    // The phone always fits the window — we never floor at the un-scaled
+    // frame height (`fh`), because tall sources (Samsung 864x1920 → frame
+    // height 1992) would otherwise be drawn at 1:1 inside a ~700 px window
+    // and the bottom bezel would be clipped.
+    int phone_region_h = std::max(1, win_h - webcam_drawer_h_applied_);
+    scale          = (float)phone_region_h / fh;
+    frame_dst_w_   = (int)(fw * scale);
+    frame_dst_h_   = (int)(fh * scale);
+
+    // Match the drawer's flat top edge to the straight section of the
+    // phone's bottom bezel (inset by the scaled corner radius).
+    int webcam_corner_r_px = (int)(phone_frame_.corner_radius() *
+                                   ((float)frame_dst_w_ /
+                                    std::max(1, phone_frame_.frame_width())));
+    int webcam_inset_x = std::max(frame_dst_w_ / 16, webcam_corner_r_px);
+    int webcam_body_w  = std::max(0, frame_dst_w_ - webcam_inset_x * 2);
+    webcam_drawer_full_h_ = (int)(webcam_body_w * 9.0f / 16.0f);
+    int webcam_drawer_h   = (int)(webcam_drawer_full_h_ * webcam_drawer_anim_);
+
     // Log panel full-open width: fixed at 55% of phone height (legacy look).
     log_panel_full_w_ = (int)(frame_dst_h_ * 0.55f);
 
@@ -2213,15 +2592,22 @@ void Renderer::render_frame() {
     int log_panel_w = (int)(log_panel_full_w_ * log_panel_anim_);
 
     // Window width = phone frame + log panel (expands rightward, phone stays put).
+    // Window height = phone frame + webcam drawer (expands downward, phone
+    // stays the same size — we only grow/shrink by the drawer delta).
     // In fullscreen we don't resize the window; instead we centre the phone
-    // (and its log drawer) inside the fullscreen rect.
+    // (and its drawers) inside the fullscreen rect.
     bool is_fullscreen =
         (SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
     int needed_w = frame_dst_w_ + log_panel_w;
-    if (!is_fullscreen && win_w != needed_w) {
-        SDL_SetWindowSize(window_, needed_w, win_h);
-        win_w = needed_w;
+    int webcam_h_delta = webcam_drawer_h - webcam_drawer_h_applied_;
+    int needed_h = win_h + webcam_h_delta;
+    if (!is_fullscreen && (win_w != needed_w || webcam_h_delta != 0)) {
+        SDL_SetWindowSize(window_, needed_w, needed_h);
+        SDL_GetWindowSize(window_, &win_w, &win_h);
+        webcam_drawer_h_applied_ = webcam_drawer_h;
         window_shape_set_ = false;
+    } else if (is_fullscreen) {
+        webcam_drawer_h_applied_ = webcam_drawer_h;
     }
 
     if (is_fullscreen) {
@@ -2230,7 +2616,9 @@ void Renderer::render_frame() {
     } else {
         frame_dst_x_ = 0; // Phone at left edge; log panel expands right
     }
-    frame_dst_y_ = (win_h - frame_dst_h_) / 2;
+    // Phone keeps its centred position; the webcam drawer hangs in the
+    // newly-grown bottom region of the window.
+    frame_dst_y_ = std::max(0, (win_h - webcam_drawer_h - frame_dst_h_) / 2);
 
     int svx = frame_dst_x_ + (int)std::round(phone_frame_.screen_x() * scale);
     int svy = frame_dst_y_ + (int)std::round(phone_frame_.screen_y() * scale);
@@ -2569,6 +2957,9 @@ void Renderer::render_frame() {
 
     // Log panel (slides out to the left)
     if (log_panel_anim_ > 0.01f) draw_log_panel();
+
+    // Webcam drawer (slides down out of the bottom bezel)
+    if (webcam_drawer_anim_ > 0.01f) draw_webcam_drawer();
 
     // Menu star — center top bezel of frame
     // Track which bezel UI element (if any) the cursor is currently over,
@@ -2936,7 +3327,18 @@ void Renderer::render_frame() {
             int dot_r = std::max(3, ui_ref_width() / 120);
             int spacing = dot_r * 7;
             int total_w = spacing * (int)(sources.size() - 1);
-            int start_x = frame_dst_x_ + frame_dst_w_ / 2 - total_w / 2;
+            // Anchor: centred in the LEFT half of the bottom bezel,
+            // between where the rounded corner arc finishes (left limit)
+            // and the centred W (webcam) button (right limit). This puts
+            // the cluster visually in the middle of the empty left side,
+            // matching the user's annotated screenshot.
+            int arc_end_x   = frame_dst_x_ + bezel_bottom + dot_r * 2;
+            int wcam_dot_r  = std::max(2, ui_ref_width() / 175);
+            int wcam_hit_sz = std::max(16, wcam_dot_r * 6);
+            int wcam_left   = frame_dst_x_ + frame_dst_w_ / 2 - wcam_hit_sz / 2;
+            int cluster_cx  = (arc_end_x + wcam_left) / 2;
+            int start_x     = cluster_cx - total_w / 2;
+            if (start_x < arc_end_x) start_x = arc_end_x;
             int cy = frame_dst_y_ + frame_dst_h_ - bezel_bottom / 2;
             int hit_sz = std::max(20, dot_r * 6);
 
@@ -3007,6 +3409,67 @@ void Renderer::render_frame() {
         }
     }
 
+    // Webcam drawer toggle — bottom bezel, anchored to the horizontal
+    // CENTRE of the bezel (lines up with the top dynamic-island menu
+    // button). The source-picker dots are now anchored to the LEFT
+    // (just past the corner arc), so the two clusters never overlap.
+    // Reuses the menu-button glyph: horizontal bar ("-") closed, downward
+    // chevron ("v") open.
+    {
+        float scale = (float)frame_dst_w_ / phone_frame_.frame_width();
+        int bezel_bottom = frame_dst_h_ -
+            (int)((phone_frame_.screen_y() + phone_frame_.screen_height()) * scale);
+        int dot_r = std::max(2, ui_ref_width() / 175);
+
+        int wcam_cx = frame_dst_x_ + frame_dst_w_ / 2;
+        int wcam_cy = frame_dst_y_ + frame_dst_h_ - bezel_bottom / 2;
+        int hit_sz  = std::max(16, dot_r * 6);
+        webcam_btn_ = {wcam_cx - hit_sz / 2, wcam_cy - hit_sz / 2, hit_sz, hit_sz};
+
+        int wmx, wmy;
+        SDL_GetMouseState(&wmx, &wmy);
+        bool wcam_hover = in_rect(wmx, wmy, webcam_btn_.x, webcam_btn_.y,
+                                  webcam_btn_.w, webcam_btn_.h);
+        uint8_t wa = (wcam_hover || webcam_drawer_visible_) ? 240 : 160;
+        SDL_SetRenderDrawColor(sdl_renderer_, 220, 220, 220, wa);
+
+        int g_sz   = std::max(8, dot_r * 6);
+        int g_half = g_sz / 2;
+        int t_bar  = std::max(1, dot_r);
+        int t_chev = std::max(1, dot_r - 1);
+        auto fill_rect_centered = [&](int cx_, int cy_, int w, int h) {
+            SDL_Rect r{cx_ - w / 2, cy_ - h / 2, w, h};
+            SDL_RenderFillRect(sdl_renderer_, &r);
+        };
+        auto draw_thick_seg = [&](int x1, int y1, int x2, int y2, int t) {
+            int half = t / 2;
+            for (int dx = -half; dx <= half; ++dx)
+                for (int dy = -half; dy <= half; ++dy)
+                    SDL_RenderDrawLine(sdl_renderer_, x1 + dx, y1 + dy,
+                                                       x2 + dx, y2 + dy);
+        };
+        if (webcam_drawer_anim_ > 0.5f) {
+            // Open state — downward chevron "v" (same as menu button).
+            int v_drop = g_half / 2;
+            draw_thick_seg(wcam_cx - g_half, wcam_cy - v_drop / 2,
+                           wcam_cx,          wcam_cy + v_drop, t_chev);
+            draw_thick_seg(wcam_cx + g_half, wcam_cy - v_drop / 2,
+                           wcam_cx,          wcam_cy + v_drop, t_chev);
+        } else {
+            // Closed state — horizontal bar "-".
+            fill_rect_centered(wcam_cx, wcam_cy, g_sz, t_bar);
+        }
+        if (wcam_hover) {
+            bezel_hover_key  = "webcam";
+            bezel_hover_text = (webcam_drawer_visible_
+                                    ? "Hide webcam (W)"
+                                    : "Show webcam (W)") +
+                               std::string("\nRight-click: pick camera");
+            bezel_hover_ax = wcam_cx;
+            bezel_hover_ay = wcam_cy - dot_r - 4;
+        }
+    }
+
     // Resize grip — 3 dots along the phone corner arc
     {
         float scale = (float)frame_dst_w_ / phone_frame_.frame_width();
@@ -3059,6 +3522,7 @@ void Renderer::render_frame() {
             hover_key_.rfind("log", 0) == 0 ||
             hover_key_.rfind("src:", 0) == 0 ||
             hover_key_.rfind("resize", 0) == 0 ||
+            hover_key_.rfind("webcam", 0) == 0 ||
             hover_key_.rfind("bezel_", 0) == 0) {
             hover_key_.clear();
         }
@@ -3106,6 +3570,75 @@ void Renderer::render_frame() {
             items.push_back({"ocr",      "OCR copy text (Ctrl+Shift+T)"});
 #endif
             items.push_back({"open_dir", "Open screenshot folder"});
+        } else if (bezel_menu_target_ == "webcam") {
+#ifdef ENABLE_WEBCAM
+            // List cameras visible to Media Foundation. The currently
+            // selected device (settings_.webcam_device_id, empty = first
+            // available) is prefixed with a checkmark.
+            auto cams = WebcamCapture::enumerate();
+            // SDL_ttf renders the menu with an ASCII-only bitmap font;
+            // any byte >= 0x80 in the MF friendly name shows up as
+            // garbled glyphs. Strip those down to plain ASCII for the
+            // picker so the labels stay readable (the underlying
+            // device id is unchanged and still matches on click).
+            auto sanitize_ascii = [](const std::string& s) {
+                std::string out;
+                out.reserve(s.size());
+                for (unsigned char c : s) {
+                    if (c >= 0x20 && c < 0x7F) out.push_back((char)c);
+                    else if (c == ' ' || c == '\t') out.push_back(' ');
+                    // skip multi-byte / control bytes entirely
+                }
+                // collapse runs of spaces
+                std::string collapsed;
+                collapsed.reserve(out.size());
+                bool prev_space = false;
+                for (char c : out) {
+                    if (c == ' ') {
+                        if (!prev_space) collapsed.push_back(' ');
+                        prev_space = true;
+                    } else {
+                        collapsed.push_back(c);
+                        prev_space = false;
+                    }
+                }
+                while (!collapsed.empty() && collapsed.back() == ' ')
+                    collapsed.pop_back();
+                size_t start = collapsed.find_first_not_of(' ');
+                if (start == std::string::npos) return std::string("(camera)");
+                return collapsed.substr(start);
+            };
+            if (cams.empty()) {
+                items.push_back({"_none", "(no webcam detected)"});
+            } else {
+                bool any_selected = false;
+                for (auto& c : cams) {
+                    bool sel = (c.id == settings_.webcam_device_id);
+                    if (sel) any_selected = true;
+                    // SDL_ttf's bitmap font is ASCII-only, so use a
+                    // plain '>' as the selection marker instead of a
+                    // UTF-8 check glyph (which renders as garbage).
+                    std::string prefix = sel ? "> " : "  ";
+                    items.push_back({"wc:" + c.id, prefix + sanitize_ascii(c.name)});
+                }
+                if (!any_selected && !items.empty()) {
+                    items.front().label = "> " +
+                                          items.front().label.substr(2);
+                }
+            }
+            items.push_back({
+                settings_.webcam_mirror_h ? "mirror_off" : "mirror_on",
+                settings_.webcam_mirror_h
+                    ? "Stop mirroring (selfie view)"
+                    : "Mirror horizontally (selfie view)"});
+            items.push_back({
+                webcam_drawer_visible_ ? "hide" : "show",
+                webcam_drawer_visible_
+                    ? "Hide Webcam (W)"
+                    : "Show Webcam (W)"});
+#else
+            items.push_back({"_none", "(webcam support disabled at build time)"});
+#endif
         }
         if (items.empty()) {
             bezel_menu_visible_ = false;
@@ -3185,6 +3718,13 @@ void Renderer::render_frame() {
                 panel_x = bezel_menu_anchor_x_ - panel_w - 12;
                 panel_y = bezel_menu_anchor_y_ - panel_h / 2;
                 dx = (int)(panel_w * 0.3f);
+            } else if (bezel_menu_target_ == "webcam") {
+                // Webcam toggle sits in the bottom-LEFT bezel — open the
+                // menu to the RIGHT of the cursor so it doesn't clip off
+                // the left edge of the window.
+                panel_x = bezel_menu_anchor_x_ + 12;
+                panel_y = bezel_menu_anchor_y_ - panel_h - 12;
+                dy = (int)(panel_h * 0.3f);
             } else {
                 // Sources (bottom) and fallback: slide up from the button.
                 panel_x = bezel_menu_anchor_x_ - panel_w / 2;
@@ -3256,7 +3796,7 @@ void Renderer::render_frame() {
     }
 
     // Window shape
-    if (!window_shape_set_ || log_panel_animating_) {
+    if (!window_shape_set_ || log_panel_animating_ || webcam_drawer_animating_) {
         update_window_shape();
         window_shape_set_ = true;
     }
@@ -3274,6 +3814,20 @@ void Renderer::render_frame() {
     }
     process_ocr_result();
 #endif
+
+    // Deferred tooltip from early-frame panels (e.g. webcam drawer).
+    // Painted here so it sits above the bottom bezel / dynamic island
+    // / resize grip that drew over the drawer earlier in the frame.
+    if (!pending_tooltip_text_.empty()) {
+        draw_bezel_tooltip(pending_tooltip_text_,
+                           pending_tooltip_x_, pending_tooltip_y_,
+                           pending_tooltip_below_,
+                           pending_tooltip_align_,
+                           pending_tooltip_valign_);
+        pending_tooltip_text_.clear();
+        pending_tooltip_align_  = 0;
+        pending_tooltip_valign_ = 0;
+    }
 
     SDL_RenderPresent(sdl_renderer_);
 
@@ -3307,10 +3861,21 @@ void Renderer::render_frame() {
 
     // Push the latest composited frame to the recorder.
     if (recorder_.is_recording() && !last_frame_data_.empty()) {
+#ifdef ENABLE_WEBCAM
+        // Keep webcam_last_rgba_ fresh even when the drawer is collapsed
+        // so the recording composite never freezes on a stale frame.
+        if (recording_with_webcam_ && webcam_.is_running()) {
+            poll_webcam_frame();
+        }
+#endif
+
         // When the phone bezel is on, encode the same composite the user sees
         // (rounded corners, dynamic island, bottom bar). MP4/GIF cannot carry
         // alpha, so the area outside the rounded bezel ends up black — which
         // reads as an intentional matte around the phone.
+        const uint8_t* base_rgba = nullptr;
+        int base_w = 0, base_h = 0, base_stride = 0;
+        std::unique_ptr<uint8_t[]> phone_owned;
         if (phone_frame_enabled_ && phone_frame_.is_generated()) {
             int cw = 0, ch = 0;
             uint8_t* composite = phone_frame_.composite_screenshot(
@@ -3318,15 +3883,43 @@ void Renderer::render_frame() {
                 last_frame_data_.data(), last_frame_w_, last_frame_h_, last_frame_stride_,
                 &cw, &ch);
             if (composite) {
-                recorder_.push_frame(composite, cw, ch, cw * 4);
-                delete[] composite;
-            } else {
-                recorder_.push_frame(last_frame_data_.data(), last_frame_w_,
-                                     last_frame_h_, last_frame_stride_);
+                phone_owned.reset(composite);
+                base_rgba   = composite;
+                base_w      = cw;
+                base_h      = ch;
+                base_stride = cw * 4;
             }
-        } else {
-            recorder_.push_frame(last_frame_data_.data(), last_frame_w_,
-                                 last_frame_h_, last_frame_stride_);
+        }
+        if (!base_rgba) {
+            base_rgba   = last_frame_data_.data();
+            base_w      = last_frame_w_;
+            base_h      = last_frame_h_;
+            base_stride = last_frame_stride_;
+        }
+
+#ifdef ENABLE_WEBCAM
+        if (recording_with_webcam_ && recording_webcam_panel_h_ > 0 &&
+            base_w == recording_canvas_w_ && base_h == recording_canvas_h_base_) {
+            // Allocate the extended canvas (phone composite on top with
+            // the panel tucked behind it by recording_webcam_overlap_).
+            // Paint the strip FIRST so its top rows sit inside the
+            // phone-bezel area, then alpha-composite the phone bezel on
+            // top — same flow as the screenshot/annotation paths.
+            int out_w    = recording_canvas_w_;
+            int overlap  = recording_webcam_overlap_;
+            int out_h    = recording_canvas_h_base_ +
+                           recording_webcam_panel_h_ - overlap;
+            std::vector<uint8_t> out(static_cast<size_t>(out_w) * out_h * 4, 0);
+            paint_webcam_strip(out.data(), out_w,
+                               base_h - overlap, recording_webcam_panel_h_,
+                               overlap);
+            blit_phone_over_strip(out.data(), out_w * 4,
+                                  base_rgba, base_stride, base_w, base_h);
+            recorder_.push_frame(out.data(), out_w, out_h, out_w * 4);
+        } else
+#endif
+        {
+            recorder_.push_frame(base_rgba, base_w, base_h, base_stride);
         }
     }
 
@@ -3561,7 +4154,7 @@ void Renderer::draw_update_banner() {}
 #endif
 
 void Renderer::draw_bezel_tooltip(const std::string& text, int anchor_x, int anchor_y,
-                                  bool prefer_below) {
+                                  bool prefer_below, int h_align, int v_align) {
     if (text.empty()) return;
 
     // Split on the first '\n' into a primary line and an optional secondary
@@ -3609,9 +4202,14 @@ void Renderer::draw_bezel_tooltip(const std::string& text, int anchor_x, int anc
     int win_w = 0, win_h = 0;
     SDL_GetWindowSize(window_, &win_w, &win_h);
 
-    int tx = anchor_x - tw / 2;
+    int tx;
+    if (h_align == 1)      tx = anchor_x - tw; // tooltip ends at anchor
+    else if (h_align == 2) tx = anchor_x;      // tooltip starts at anchor
+    else                   tx = anchor_x - tw / 2;
     int ty;
-    if (prefer_below) {
+    if (v_align == 1) {
+        ty = anchor_y - th / 2; // vertically centered on anchor_y
+    } else if (prefer_below) {
         ty = anchor_y + 12;
         if (ty + th > win_h - 4) ty = anchor_y - th - 6; // flip up if no room
     } else {
@@ -4450,10 +5048,19 @@ void Renderer::draw_version_panel() {
     int line_gap = std::max(3, pad / 4);
     int spacer_h = std::max(4, pad / 2);
 
+    // Panel width is computed up-front so the text-fit scaling below can
+    // target the actual usable content width (panel_w - pad*2) rather than
+    // a fixed fraction of ui_ref_width(). Without this the panel reserves
+    // a lot of empty horizontal space and is forced to shrink the long
+    // pre-wrapped description textures down even when there is plenty of
+    // room to draw them at the default scale.
+    int panel_w = (std::min)((int)(svw * 0.85f), (int)(uw * 1.6f));
+    int panel_x = svx + (svw - panel_w) / 2;
+
     // Scale text to fit panel, but never shrink below a readable minimum.
     // If a line is still too wide at the minimum scale it will overflow the
     // clip rect (acceptable) — the scrollbar handles vertical overflow.
-    float max_text_w = uw * 0.7f;
+    float max_text_w = (float)std::max(40, panel_w - pad * 2);
     const float min_text_scale = 0.40f;
     float text_scale = 0.5f;
     for (auto& line : version_lines_) {
@@ -4471,9 +5078,6 @@ void Renderer::draw_version_panel() {
             content_h += spacer_h;
     }
     content_h += pad - line_gap;
-
-    int panel_w = (std::min)((int)(svw * 0.85f), (int)(uw * 1.6f));
-    int panel_x = svx + (svw - panel_w) / 2;
 
     // Position below island bar
     int btn_sz = std::max(20, uw / 14);
@@ -4554,9 +5158,20 @@ void Renderer::draw_version_panel() {
         float scroll_frac = (max_scroll > 0) ? (float)version_scroll_offset_ / max_scroll : 0.0f;
         int thumb_y = track_y + (int)((track_h - thumb_h) * scroll_frac);
 
+        // Stash geometry for the click/drag handlers in the event loop.
+        version_sb_x_          = sb_x;
+        version_sb_w_          = sb_w;
+        version_sb_track_y_    = track_y;
+        version_sb_track_h_    = track_h;
+        version_sb_thumb_h_    = thumb_h;
+        version_sb_max_scroll_ = max_scroll;
+
         SDL_SetRenderDrawColor(sdl_renderer_, 80, 80, 90, (uint8_t)(180 * version_panel_anim_));
         SDL_Rect thumb = {sb_x, thumb_y, sb_w, thumb_h};
         SDL_RenderFillRect(sdl_renderer_, &thumb);
+    } else {
+        version_sb_track_h_    = 0;
+        version_sb_max_scroll_ = 0;
     }
 }
 
@@ -4657,6 +5272,8 @@ void Renderer::draw_settings_panel() {
                 + (label_h + 2)                           // toggle 6 (telemetry)
                 + 3 * (telemetry_sub_h + 1) + row_gap     // telemetry subtitle (3 lines)
                 + label_h + row_gap                       // toggle 7 (file log)
+                + label_h + row_gap                       // toggle 8 (webcam mirror)
+                + label_h + row_gap                       // toggle 9 (webcam in recording)
                 + label_h + row_gap                       // recording format row
                 + pad;
 
@@ -4810,6 +5427,14 @@ void Renderer::draw_settings_panel() {
     settings_toggle_log_btn_ = draw_toggle(
         "Save log file to screenshots folder (this session)",
         log_to_file_session_, cy);
+    cy += label_h + row_gap;
+    settings_toggle_webcam_mirror_btn_ = draw_toggle(
+        "Mirror webcam horizontally (selfie view)",
+        settings_.webcam_mirror_h, cy);
+    cy += label_h + row_gap;
+    settings_toggle_webcam_record_btn_ = draw_toggle(
+        "Include webcam in recordings",
+        settings_.webcam_include_in_recording, cy);
     cy += label_h + row_gap;
 
     // Recording format row — two pill buttons (MP4 / GIF) on the left so
@@ -6080,8 +6705,10 @@ void Renderer::take_screenshot() {
     strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &local_tm);
     // Primary filename in the user's screenshots folder. If "save" is off
     // but Snagit is on we write a transient copy into %TEMP% so Snagit
-    // has something to open.
-    std::string filename = screenshot_dir_ + "/screenshot_" + timestamp + ".png";
+    // has something to open. Filename format is <date>_<time>_<kind>.png
+    // so screenshots and annotated captures sort chronologically when
+    // mixed in the same folder.
+    std::string filename = screenshot_dir_ + "/" + timestamp + "_screenshot.png";
     std::string snagit_path; // path passed to Snagit when save==false
     if (!save && snag) {
         std::error_code ec;
@@ -6090,6 +6717,10 @@ void Renderer::take_screenshot() {
     }
 
     bool saved = false;
+    // M5 (WYSIWYG): if the webcam drawer is open, grow the screenshot
+    // canvas downward and stitch in the same camera strip the user
+    // sees on screen. Mirror toggle is honoured by paint_webcam_strip.
+    const bool include_cam = should_include_webcam_in_capture();
     if (phone_frame_enabled_ && phone_frame_.is_generated()) {
         int out_w, out_h;
         uint8_t* composite = phone_frame_.composite_screenshot(
@@ -6097,33 +6728,81 @@ void Renderer::take_screenshot() {
             last_frame_data_.data(), last_frame_w_, last_frame_h_, last_frame_stride_,
             &out_w, &out_h);
         if (composite) {
+            std::unique_ptr<uint8_t[]> composite_owned(composite);
+            const uint8_t* save_rgba = composite;
+            int save_w = out_w, save_h = out_h;
+            std::vector<uint8_t> stitched;
+            if (include_cam) {
+                int panel_w = out_w - (out_w / 16) * 2;
+                int panel_h = panel_w > 0 ? panel_w * 9 / 16 : 0;
+                // Tuck the strip up behind the phone bezel by the corner
+                // radius so the drawer connects flush to the phone (no
+                // visible "air" band between the bezel curve and the
+                // panel top).
+                int overlap = panel_w > 0 ? std::max(0, panel_w / 30) : 0;
+                if (panel_h > overlap) {
+                    save_h = out_h + panel_h - overlap;
+                    stitched.assign((size_t)out_w * save_h * 4, 0);
+                    // Paint the webcam strip FIRST so its top rows sit
+                    // inside the phone-bezel area, then composite the
+                    // phone composite on top via alpha-over — the bezel
+                    // hides the panel where opaque and lets the panel
+                    // body bleed through the rounded corner cutouts.
+                    paint_webcam_strip(stitched.data(), out_w,
+                                       out_h - overlap, panel_h, overlap);
+                    blit_phone_over_strip(stitched.data(), out_w * 4,
+                                          composite, out_w * 4,
+                                          out_w, out_h);
+                    save_rgba = stitched.data();
+                }
+            }
             bool wrote = true;
             if (save) {
-                wrote = stbi_write_png(filename.c_str(), out_w, out_h, 4, composite, out_w * 4) != 0;
+                wrote = stbi_write_png(filename.c_str(), out_w, save_h, 4, save_rgba, out_w * 4) != 0;
             } else if (snag && !snagit_path.empty()) {
-                wrote = stbi_write_png(snagit_path.c_str(), out_w, out_h, 4, composite, out_w * 4) != 0;
+                wrote = stbi_write_png(snagit_path.c_str(), out_w, save_h, 4, save_rgba, out_w * 4) != 0;
             }
             if (wrote) {
                 saved = true;
-                if (clip) copy_to_clipboard(composite, out_w, out_h);
+                if (clip) copy_to_clipboard(save_rgba, out_w, save_h);
                 if (snag) open_in_snagit(save ? filename : snagit_path);
-                if (save) std::cout << "[Screenshot] Saved: " << filename << " (" << out_w << "x" << out_h << ")\n";
-                else if (clip) std::cout << "[Screenshot] Copied to clipboard (" << out_w << "x" << out_h << ")\n";
+                if (save) std::cout << "[Screenshot] Saved: " << filename << " (" << out_w << "x" << save_h << ")\n";
+                else if (clip) std::cout << "[Screenshot] Copied to clipboard (" << out_w << "x" << save_h << ")\n";
             }
-            delete[] composite;
         }
     } else {
+        const uint8_t* save_rgba = last_frame_data_.data();
+        int save_w = last_frame_w_, save_h = last_frame_h_;
+        int save_stride = last_frame_stride_;
+        std::vector<uint8_t> stitched;
+        if (include_cam) {
+            int panel_w = save_w - (save_w / 16) * 2;
+            int panel_h = panel_w > 0 ? panel_w * 9 / 16 : 0;
+            if (panel_h > 0) {
+                int new_h = save_h + panel_h;
+                stitched.assign((size_t)save_w * new_h * 4, 0);
+                for (int y = 0; y < save_h; ++y) {
+                    std::memcpy(stitched.data() + (size_t)y * save_w * 4,
+                                last_frame_data_.data() + (size_t)y * save_stride,
+                                (size_t)save_w * 4);
+                }
+                paint_webcam_strip(stitched.data(), save_w, save_h, panel_h);
+                save_rgba   = stitched.data();
+                save_h      = new_h;
+                save_stride = save_w * 4;
+            }
+        }
         bool wrote = true;
         if (save) {
-            wrote = stbi_write_png(filename.c_str(), last_frame_w_, last_frame_h_, 4,
-                                   last_frame_data_.data(), last_frame_stride_) != 0;
+            wrote = stbi_write_png(filename.c_str(), save_w, save_h, 4,
+                                   save_rgba, save_stride) != 0;
         } else if (snag && !snagit_path.empty()) {
-            wrote = stbi_write_png(snagit_path.c_str(), last_frame_w_, last_frame_h_, 4,
-                                   last_frame_data_.data(), last_frame_stride_) != 0;
+            wrote = stbi_write_png(snagit_path.c_str(), save_w, save_h, 4,
+                                   save_rgba, save_stride) != 0;
         }
         if (wrote) {
             saved = true;
-            if (clip) copy_to_clipboard(last_frame_data_.data(), last_frame_w_, last_frame_h_);
+            if (clip) copy_to_clipboard(save_rgba, save_w, save_h);
             if (snag) open_in_snagit(save ? filename : snagit_path);
             if (save) std::cout << "[Screenshot] Saved: " << filename << "\n";
             else if (clip) std::cout << "[Screenshot] Copied to clipboard\n";
@@ -6379,9 +7058,11 @@ void Renderer::begin_annotation() {
     }
 
     // Capture the same composite take_screenshot() would save, so what
-    // the user marks up matches what they would have got with Ctrl+S.
+    // the user marks up matches what they would have got with Ctrl+S
+    // (including the webcam strip when the drawer is open).
     int cap_w = 0, cap_h = 0;
     std::vector<uint8_t> rgba;
+    const bool include_cam = should_include_webcam_in_capture();
     if (phone_frame_enabled_ && phone_frame_.is_generated()) {
         uint8_t* composite = phone_frame_.composite_screenshot(
             sdl_renderer_,
@@ -6391,18 +7072,50 @@ void Renderer::begin_annotation() {
             std::cout << "[Annotate] composite_screenshot returned null\n";
             return;
         }
-        rgba.assign(composite, composite + (size_t)cap_w * cap_h * 4);
-        delete[] composite;
+        std::unique_ptr<uint8_t[]> composite_owned(composite);
+        int panel_h = 0;
+        int overlap = 0;
+        if (include_cam) {
+            int panel_w = cap_w - (cap_w / 16) * 2;
+            if (panel_w > 0) {
+                panel_h = panel_w * 9 / 16;
+                overlap = std::max(0, panel_w / 30);
+                if (panel_h <= overlap) { panel_h = 0; overlap = 0; }
+            }
+        }
+        int total_h = cap_h + std::max(0, panel_h - overlap);
+        rgba.assign((size_t)cap_w * total_h * 4, 0);
+        if (panel_h > 0) {
+            // Strip first (tucked behind the phone bezel), then phone
+            // composited on top via alpha-over so the bezel hides the
+            // overlap and the panel bleeds through the corner cutouts.
+            paint_webcam_strip(rgba.data(), cap_w, cap_h - overlap, panel_h,
+                               overlap);
+            blit_phone_over_strip(rgba.data(), cap_w * 4,
+                                  composite, cap_w * 4, cap_w, cap_h);
+            cap_h = total_h;
+        } else {
+            std::memcpy(rgba.data(), composite, (size_t)cap_w * cap_h * 4);
+        }
     } else {
         cap_w = last_frame_w_;
-        cap_h = last_frame_h_;
-        rgba.resize((size_t)cap_w * cap_h * 4);
+        int panel_h = 0;
+        if (include_cam) {
+            int panel_w = cap_w - (cap_w / 16) * 2;
+            if (panel_w > 0) panel_h = panel_w * 9 / 16;
+        }
+        int total_h = last_frame_h_ + panel_h;
+        rgba.assign((size_t)cap_w * total_h * 4, 0);
         // last_frame_stride_ may include padding; copy row-by-row.
-        for (int y = 0; y < cap_h; ++y) {
+        for (int y = 0; y < last_frame_h_; ++y) {
             memcpy(rgba.data() + (size_t)y * cap_w * 4,
                    last_frame_data_.data() + (size_t)y * last_frame_stride_,
                    (size_t)cap_w * 4);
         }
+        if (panel_h > 0) {
+            paint_webcam_strip(rgba.data(), cap_w, last_frame_h_, panel_h);
+        }
+        cap_h = total_h;
     }
 
     // Build SDL texture from the captured RGBA. Kept around for the
@@ -6674,7 +7387,9 @@ void Renderer::save_annotated() {
     strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &local_tm);
     if (save) {
         std::filesystem::create_directories(screenshot_dir_);
-        filename = screenshot_dir_ + "/annotated_" + timestamp + ".png";
+        // <date>_<time>_<kind>.png — sorts chronologically alongside
+        // plain screenshots saved to the same folder.
+        filename = screenshot_dir_ + "/" + timestamp + "_annotated.png";
         wrote = stbi_write_png(filename.c_str(), annotator_bg_w_, annotator_bg_h_,
                                4, baked.data(), annotator_bg_w_ * 4) != 0;
     } else if (snag) {
@@ -7475,7 +8190,9 @@ std::string Renderer::make_recording_path() const {
     char ts[32];
     strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", &local_tm);
     const char* ext = (settings_.record_format == 1) ? ".gif" : ".mp4";
-    return screenshot_dir_ + "/recording_" + ts + ext;
+    // <date>_<time>_<kind>.<ext> so MP4/GIF recordings sort
+    // chronologically alongside PNG screenshots in the same folder.
+    return screenshot_dir_ + "/" + ts + "_recording" + ext;
 }
 
 void Renderer::start_recording() {
@@ -7501,6 +8218,34 @@ void Renderer::start_recording() {
         src_w = phone_frame_.frame_width();
         src_h = phone_frame_.frame_height();
     }
+
+    // M5: lock in the webcam panel decision for the whole recording.
+    // Dimensions must stay constant for the entire clip (the encoder
+    // can't change resolution mid-stream), so we capture the intent
+    // here and keep the panel attached even if the user toggles the
+    // drawer mid-recording.
+    recording_with_webcam_    = false;
+    recording_webcam_panel_h_ = 0;
+    recording_canvas_w_       = src_w;
+    recording_canvas_h_base_  = src_h;
+    recording_webcam_overlap_ = 0;
+#ifdef ENABLE_WEBCAM
+    if (settings_.webcam_include_in_recording && webcam_.is_running()) {
+        int rec_inset   = src_w / 16;
+        int rec_panel_w = src_w - rec_inset * 2;
+        int rec_panel_h = rec_panel_w * 9 / 16;
+        // Same "tuck behind the bezel" amount used by screenshots so
+        // the recorded composite matches what Ctrl+S produces.
+        int rec_overlap = std::max(0, rec_panel_w / 30);
+        if (rec_panel_h > rec_overlap && rec_panel_w > 0) {
+            recording_with_webcam_    = true;
+            recording_webcam_panel_h_ = rec_panel_h;
+            recording_webcam_overlap_ = rec_overlap;
+            src_h += rec_panel_h - rec_overlap;
+        }
+    }
+#endif
+
     cfg.width            = src_w & ~1;
     cfg.height           = src_h & ~1;
     // Downscale GIFs aggressively — RGB8 already loses colour; smaller
@@ -7640,13 +8385,18 @@ void Renderer::update_window_shape() {
     int cur_lp_w = (log_panel_anim_ > 0.01f)
                        ? (int)(log_panel_full_w_ * log_panel_anim_)
                        : 0;
+    int cur_wc_h = (webcam_drawer_anim_ > 0.01f)
+                       ? (int)(webcam_drawer_full_h_ * webcam_drawer_anim_)
+                       : 0;
     if (cur_lp_w == window_shape_last_lp_w_ &&
+        cur_wc_h == window_shape_last_wc_h_ &&
         frame_dst_w_ == window_shape_last_frame_w_ &&
         frame_dst_x_ == window_shape_last_frame_x_ &&
         frame_dst_y_ == window_shape_last_frame_y_) {
         return;
     }
     window_shape_last_lp_w_ = cur_lp_w;
+    window_shape_last_wc_h_ = cur_wc_h;
     window_shape_last_frame_w_ = frame_dst_w_;
     window_shape_last_frame_x_ = frame_dst_x_;
     window_shape_last_frame_y_ = frame_dst_y_;
@@ -7701,6 +8451,54 @@ void Renderer::update_window_shape() {
             if (log_rgn) {
                 CombineRgn(phone_rgn, phone_rgn, log_rgn, RGN_OR);
                 DeleteObject(log_rgn);
+            }
+        }
+    }
+
+    // Webcam drawer region (hangs below the phone frame, inset L/R to
+    // match the straight section of the phone's bottom bezel, rounded
+    // bottom corners only, with a small bottom margin so the panel
+    // doesn't hit the window edge \u2014 matches draw_webcam_drawer()).
+    if (cur_wc_h > 0) {
+        float wc_scale = phone_frame_.frame_width() > 0
+            ? (float)frame_dst_w_ / (float)phone_frame_.frame_width()
+            : 1.0f;
+        int inset_x = std::max(frame_dst_w_ / 16,
+                               (int)(phone_frame_.corner_radius() * wc_scale));
+        int wd_margin = std::max(4, frame_dst_w_ / 40);
+        int wc_left   = frame_dst_x_ + inset_x;
+        int wc_right  = frame_dst_x_ + frame_dst_w_ - inset_x;
+        int wc_top    = frame_dst_y_ + frame_dst_h_;
+        int wc_bottom = wc_top + std::max(0, cur_wc_h - wd_margin);
+        int wc_w_px   = wc_right - wc_left;
+        int wc_h_px   = wc_bottom - wc_top;
+        int wc_cr     = std::max(8, wc_w_px / 30);
+        if (wc_w_px > 0 && wc_h_px > 0) {
+            HRGN wc_rgn = nullptr;
+            if (wc_w_px > wc_cr * 2 && wc_h_px > wc_cr) {
+                // Rounded bottom corners; flat top edge (flush with phone).
+                HRGN wc_round = CreateRoundRectRgn(
+                    wc_left, wc_top,
+                    wc_right + 1, wc_bottom + 1,
+                    wc_cr * 2, wc_cr * 2);
+                HRGN wc_flat_top = CreateRectRgn(
+                    wc_left, wc_top,
+                    wc_right + 1, wc_top + wc_cr);
+                if (wc_round && wc_flat_top) {
+                    CombineRgn(wc_round, wc_round, wc_flat_top, RGN_OR);
+                    wc_rgn = wc_round;
+                    DeleteObject(wc_flat_top);
+                } else {
+                    if (wc_round)    DeleteObject(wc_round);
+                    if (wc_flat_top) DeleteObject(wc_flat_top);
+                }
+            } else {
+                wc_rgn = CreateRectRgn(wc_left, wc_top,
+                                       wc_right + 1, wc_bottom + 1);
+            }
+            if (wc_rgn) {
+                CombineRgn(phone_rgn, phone_rgn, wc_rgn, RGN_OR);
+                DeleteObject(wc_rgn);
             }
         }
     }
@@ -8146,5 +8944,629 @@ void Renderer::process_ocr_result() {
     end_ocr();
 }
 #endif // _WIN32
+
+void Renderer::toggle_webcam_drawer() {
+    webcam_drawer_visible_   = !webcam_drawer_visible_;
+    webcam_drawer_animating_ = true;
+    webcam_drawer_anim_start_ = std::chrono::steady_clock::now();
+    settings_.webcam_drawer_open = webcam_drawer_visible_;
+    settings_.save();
+#ifdef ENABLE_WEBCAM
+    if (webcam_drawer_visible_) {
+        if (!webcam_.is_running()) {
+            // Detached so we never block the UI thread while MF spins up.
+            std::string dev = settings_.webcam_device_id;
+            opm::Settings::set_webcam_pending();
+            webcam_pending_cleared_ = false;
+            std::thread([this, dev]() {
+                if (!webcam_.start(dev, 1280, 720)) {
+                    std::cerr << "[Webcam] start failed: "
+                              << webcam_.last_error() << "\n";
+                    opm::Settings::clear_webcam_pending();
+                    webcam_pending_cleared_ = true;
+                }
+            }).detach();
+        }
+    } else {
+        if (webcam_.is_running()) {
+            std::thread([this]() {
+                webcam_.stop();
+                opm::Settings::clear_webcam_pending();
+                webcam_pending_cleared_ = true;
+            }).detach();
+        }
+    }
+#endif
+}
+
+void Renderer::save_webcam_screenshot() {
+#ifdef ENABLE_WEBCAM
+    if (webcam_last_rgba_.empty() ||
+        webcam_last_w_ <= 0 || webcam_last_h_ <= 0) {
+        toast_text_  = "Webcam: no frame to save yet";
+        toast_active_ = true;
+        toast_start_ = std::chrono::steady_clock::now();
+        return;
+    }
+
+    auto now = std::chrono::system_clock::now();
+    auto tt  = std::chrono::system_clock::to_time_t(now);
+    struct tm local_tm;
+#ifdef _WIN32
+    localtime_s(&local_tm, &tt);
+#else
+    localtime_r(&tt, &local_tm);
+#endif
+    char timestamp[32];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H-%M-%S", &local_tm);
+
+    std::error_code ec;
+    std::filesystem::create_directories(screenshot_dir_, ec);
+    std::string filename = screenshot_dir_ + "/" + timestamp + " Webcam.png";
+
+    const int w = webcam_last_w_;
+    const int h = webcam_last_h_;
+    const bool mirror = settings_.webcam_mirror_h;
+    std::vector<uint8_t> out(webcam_last_rgba_.size());
+    if (mirror) {
+        for (int y = 0; y < h; ++y) {
+            const uint8_t* src = webcam_last_rgba_.data() + (size_t)y * w * 4;
+            uint8_t* dst       = out.data()               + (size_t)y * w * 4;
+            for (int x = 0; x < w; ++x) {
+                const uint8_t* sp = src + (size_t)(w - 1 - x) * 4;
+                uint8_t* dp       = dst + (size_t)x * 4;
+                dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2]; dp[3] = sp[3];
+            }
+        }
+    } else {
+        std::memcpy(out.data(), webcam_last_rgba_.data(), out.size());
+    }
+
+    bool wrote = stbi_write_png(filename.c_str(), w, h, 4,
+                                out.data(), w * 4) != 0;
+    if (wrote) {
+        std::cout << "[Webcam] Saved screenshot: " << filename << "\n";
+        toast_text_ = std::string("Webcam screenshot saved \u2014 ") +
+                      std::filesystem::path(filename).filename().string();
+    } else {
+        std::cerr << "[Webcam] Failed to write " << filename << "\n";
+        toast_text_ = "Webcam screenshot failed (see log)";
+    }
+    toast_active_ = true;
+    toast_start_  = std::chrono::steady_clock::now();
+#endif
+}
+
+void Renderer::draw_webcam_drawer() {
+    if (frame_dst_w_ == 0 || webcam_drawer_anim_ < 0.01f) return;
+
+    // Design mirrors draw_log_panel() rotated 90 degrees:
+    //   * The log panel sits flush against the phone's RIGHT edge, inset
+    //     vertically by frame_dst_h_/16 from top and bottom so it stays
+    //     clear of the phone's side corner curves, and its FAR edge
+    //     (right) is rounded. It also leaves a small margin of window
+    //     background between the panel's far edge and the window edge.
+    //   * The webcam drawer sits flush against the phone's BOTTOM edge,
+    //     inset HORIZONTALLY by frame_dst_w_/16 from left and right so it
+    //     stays clear of the phone's bottom corner curves, and its FAR
+    //     edge (bottom) is rounded. We leave a matching margin between
+    //     the panel's bottom edge and the window bottom.
+    //
+    // The result reads as "a drawer slides DOWN out of the phone bottom"
+    // exactly like the log panel reads as "a drawer slides RIGHT out of
+    // the phone side".
+    // Inset to match the STRAIGHT portion of the phone's bottom bezel
+    // — i.e. the panel's flat top edge spans exactly the section of
+    // the phone bottom that isn't curving away into the corner arcs.
+    float frame_scale = phone_frame_.frame_width() > 0
+        ? (float)frame_dst_w_ / (float)phone_frame_.frame_width()
+        : 1.0f;
+    int drawer_inset = std::max(frame_dst_w_ / 16,
+                                (int)(phone_frame_.corner_radius() * frame_scale));
+    int wd_margin    = std::max(4, frame_dst_w_ / 40);
+    int panel_x = frame_dst_x_ + drawer_inset;
+    int panel_w = frame_dst_w_ - drawer_inset * 2;
+    int full_h  = webcam_drawer_full_h_;
+    int panel_h = (int)(full_h * webcam_drawer_anim_) - wd_margin;
+    if (panel_w < 40 || panel_h < 8) return;
+
+    int phone_bottom_y = frame_dst_y_ + frame_dst_h_;
+    int panel_y = phone_bottom_y;
+    int pr      = std::max(8, panel_w / 30);
+    if (pr > panel_h - 1) pr = std::max(2, panel_h - 1);
+
+    uint8_t dr, dg, db; drawer_color(dr, dg, db);
+    auto lite = [](uint8_t c, int d) -> uint8_t {
+        int v = (int)c + d; if (v < 0) v = 0; if (v > 255) v = 255;
+        return (uint8_t)v;
+    };
+    uint8_t br_ = phone_frame_.bezel_r();
+    uint8_t bg_ = phone_frame_.bezel_g();
+    uint8_t bb_ = phone_frame_.bezel_b();
+    uint8_t er = lite(br_, 30), eg = lite(bg_, 30), eb = lite(bb_, 32);
+    int bw = std::max(2, std::min(3, panel_w / 200 + 2));
+
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_NONE);
+
+    int cy_b  = panel_y + panel_h - 1 - pr;
+    int cx_lc = panel_x + pr;
+    int cx_rc = panel_x + panel_w - 1 - pr;
+
+    // 1. Interior fill (everything above the corner-centre row).
+    SDL_SetRenderDrawColor(sdl_renderer_, dr, dg, db, 255);
+    SDL_Rect body_top  = {panel_x + bw, panel_y, panel_w - bw * 2, cy_b - panel_y};
+    SDL_RenderFillRect(sdl_renderer_, &body_top);
+    SDL_Rect body_strip = {cx_lc, cy_b, cx_rc - cx_lc + 1, pr - bw};
+    SDL_RenderFillRect(sdl_renderer_, &body_strip);
+
+    // 2. Border strips (left / right / bottom-straight segment).
+    SDL_SetRenderDrawColor(sdl_renderer_, er, eg, eb, 255);
+    SDL_Rect e_lft = {panel_x, panel_y, bw, cy_b - panel_y};
+    SDL_RenderFillRect(sdl_renderer_, &e_lft);
+    SDL_Rect e_rgt = {panel_x + panel_w - bw, panel_y, bw, cy_b - panel_y};
+    SDL_RenderFillRect(sdl_renderer_, &e_rgt);
+    SDL_Rect e_bot = {cx_lc, panel_y + panel_h - bw, cx_rc - cx_lc + 1, bw};
+    SDL_RenderFillRect(sdl_renderer_, &e_bot);
+
+    // 3. Two bottom corners — coverage-based AA, same approach as
+    //    draw_log_panel() to match the visual language exactly. quad==2
+    //    means bottom-left (dx<=0, dy>=0); quad==3 means bottom-right
+    //    (dx>=0, dy>=0).
+    auto paint_corner = [&](int cx, int cy, int quad) {
+        float r_out = (float)pr;
+        float r_in  = (float)(pr - bw);
+        for (int dy = -pr - 1; dy <= pr + 1; dy++) {
+            for (int dx = -pr - 1; dx <= pr + 1; dx++) {
+                if (quad == 2 && !(dx <= 0 && dy >= 0)) continue;
+                if (quad == 3 && !(dx >= 0 && dy >= 0)) continue;
+                float d = std::sqrt((float)(dx * dx + dy * dy));
+                float cov_out = std::clamp(r_out + 0.5f - d, 0.0f, 1.0f);
+                if (cov_out <= 0.0f) continue;
+                float cov_in  = std::clamp(r_in  + 0.5f - d, 0.0f, 1.0f);
+                int px = cx + dx;
+                int py = cy + dy;
+                if (cov_in >= 1.0f) {
+                    SDL_SetRenderDrawColor(sdl_renderer_, dr, dg, db, 255);
+                    SDL_RenderDrawPoint(sdl_renderer_, px, py);
+                } else if (cov_out >= 1.0f && cov_in <= 0.0f) {
+                    SDL_SetRenderDrawColor(sdl_renderer_, er, eg, eb, 255);
+                    SDL_RenderDrawPoint(sdl_renderer_, px, py);
+                } else {
+                    // Anti-aliased seam — blend drawer/border/destination.
+                    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
+                    if (cov_in > 0.0f && cov_in < 1.0f) {
+                        SDL_SetRenderDrawColor(sdl_renderer_, dr, dg, db,
+                                               (uint8_t)(cov_in * 255));
+                        SDL_RenderDrawPoint(sdl_renderer_, px, py);
+                        float band = cov_out - cov_in;
+                        if (band > 0.0f) {
+                            SDL_SetRenderDrawColor(sdl_renderer_, er, eg, eb,
+                                                   (uint8_t)(band * 255));
+                            SDL_RenderDrawPoint(sdl_renderer_, px, py);
+                        }
+                    } else {
+                        SDL_SetRenderDrawColor(sdl_renderer_, er, eg, eb,
+                                               (uint8_t)(cov_out * 255));
+                        SDL_RenderDrawPoint(sdl_renderer_, px, py);
+                    }
+                    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_NONE);
+                }
+            }
+        }
+    };
+    paint_corner(cx_lc, cy_b, 2);
+    paint_corner(cx_rc, cy_b, 3);
+
+    SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
+
+    // --- Live webcam image -------------------------------------------------
+    // Inner content rect (sit inside the border so the image never
+    // overlaps the rounded corners).
+    int inner_x = panel_x + bw + 2;
+    int inner_y = panel_y + bw + 2;
+    int inner_w = panel_w - (bw + 2) * 2;
+    int inner_h = panel_h - (bw + 2) * 2;
+    if (inner_w <= 4 || inner_h <= 4) return;
+
+    // The in-drawer controls (screenshot button + camera-switch dots)
+    // are OVERLAID on top of the image instead of reserving horizontal
+    // rails, so the camera frame keeps the full width it had before
+    // the buttons were added. They're sized off the bottom-bezel dot
+    // metrics so they read at the same visual weight as the rest of
+    // the app and tucked into the inner edges of the drawer.
+    webcam_shot_btn_ = {};
+    webcam_cam_btns_.clear();
+    int rail_btn_sz = std::max(14, ui_ref_width() / 22);
+    if (rail_btn_sz > inner_h - 6) rail_btn_sz = std::max(12, inner_h - 6);
+    // Tucked tight to the inner edge so they sit out of the way of the
+    // camera frame. A 2 px hairline gap keeps them off the rounded
+    // border without eating noticeable image area.
+    int rail_pad   = 0;
+    int img_x      = inner_x;
+    int img_w      = inner_w;
+    int img_y      = inner_y;
+    int img_h      = inner_h;
+
+    // Poll the capture worker once per render tick (no-op if no fresh
+    // frame). poll_webcam_frame() also keeps webcam_last_rgba_ in sync
+    // so the recorder composite path can grab the pixels even when the
+    // drawer is collapsed mid-recording.
+    poll_webcam_frame();
+
+    if (webcam_texture_ && webcam_tex_w_ > 0 && webcam_tex_h_ > 0) {
+        // Aspect-fit (letterbox) the camera frame into the image rect.
+        float src_ar = (float)webcam_tex_w_ / (float)webcam_tex_h_;
+        float dst_ar = (float)img_w / (float)img_h;
+        int draw_w, draw_h;
+        if (src_ar > dst_ar) {
+            draw_w = img_w;
+            draw_h = (int)(img_w / src_ar);
+        } else {
+            draw_h = img_h;
+            draw_w = (int)(img_h * src_ar);
+        }
+        SDL_Rect dst = { img_x + (img_w - draw_w) / 2,
+                         img_y + (img_h - draw_h) / 2,
+                         draw_w, draw_h };
+        SDL_RendererFlip flip = settings_.webcam_mirror_h
+                                    ? SDL_FLIP_HORIZONTAL
+                                    : SDL_FLIP_NONE;
+        SDL_RenderCopyEx(sdl_renderer_, webcam_texture_,
+                         nullptr, &dst, 0.0, nullptr, flip);
+    } else if (webcam_.is_running()) {
+        // Camera is warming up — leave the drawer blank (already filled
+        // with the drawer body colour above).
+    } else {
+        // Not running: render a faint status hint so the user knows
+        // why the drawer is dark.
+        std::string msg = webcam_.last_error().empty()
+                              ? std::string("Right-click the bottom button to pick a camera")
+                              : ("Webcam error: " + webcam_.last_error());
+        int eq_w = ui_ref_width();
+        int font_h = std::max(11, eq_w / 44);
+        int tw = 0, th = 0;
+        SDL_Texture* tex = make_text_texture(
+            sdl_renderer_, msg, font_h, 200, 200, 200, &tw, &th);
+        if (tex) {
+            SDL_Rect dst = { img_x + (img_w - tw) / 2,
+                             img_y + (img_h - th) / 2,
+                             tw, th };
+            SDL_RenderCopy(sdl_renderer_, tex, nullptr, &dst);
+            SDL_DestroyTexture(tex);
+        }
+    }
+
+#ifdef ENABLE_WEBCAM
+    if (inner_w > rail_btn_sz * 3 && inner_h >= rail_btn_sz + 4) {
+        int mx, my;
+        SDL_GetMouseState(&mx, &my);
+
+        // ----- Left overlay: webcam-only screenshot button -----------------
+        int sb_x = inner_x + rail_pad;
+        int sb_y = inner_y + (inner_h - rail_btn_sz) / 2;
+        webcam_shot_btn_ = {sb_x, sb_y, rail_btn_sz, rail_btn_sz};
+        bool sb_hover = in_rect(mx, my, sb_x, sb_y, rail_btn_sz, rail_btn_sz);
+        bool sb_enabled = webcam_texture_ && webcam_tex_w_ > 0;
+        // Slightly more opaque than the bezel buttons because the
+        // background here might be the live camera image rather than
+        // the dark drawer body.
+        uint8_t sb_bg = sb_hover ? 70 : 50;
+        SDL_SetRenderDrawColor(sdl_renderer_, sb_bg, sb_bg, sb_bg + 5, 210);
+        fill_circle(sdl_renderer_, sb_x + rail_btn_sz / 2,
+                    sb_y + rail_btn_sz / 2, rail_btn_sz / 2);
+        int ssr  = rail_btn_sz / 4;
+        int sscx = sb_x + rail_btn_sz / 2;
+        int sscy = sb_y + rail_btn_sz / 2;
+        uint8_t dot_a = sb_enabled
+                            ? (sb_hover ? 255 : 220)
+                            : 90; // dimmed when no frame yet
+        SDL_SetRenderDrawColor(sdl_renderer_, 240, 240, 240, dot_a);
+        fill_circle(sdl_renderer_, sscx, sscy, ssr);
+        if (sb_hover && tooltip_ready("wcdraw_shot")) {
+            pending_tooltip_text_  = sb_enabled ? "Save webcam screenshot"
+                                                : "Webcam not ready yet";
+            // Anchor just inside the right edge of the button so the
+            // tooltip extends INTO the frame instead of clipping past
+            // the drawer's left edge.
+            pending_tooltip_x_      = sb_x + rail_btn_sz;
+            pending_tooltip_y_      = my; // vertically follow the mouse
+            pending_tooltip_below_  = false;
+            pending_tooltip_align_  = 2; // tooltip extends to the RIGHT
+            pending_tooltip_valign_ = 1; // vertically centered on mouse Y
+        }
+
+        // ----- Right overlay: one dot per available camera ----------------
+        // Same visual language as the resize-grip dots: small white
+        // filled circles with hover-brightened alpha. The ACTIVE camera
+        // is drawn brighter and wrapped in a thin ring so it reads as
+        // selected without needing a colour change.
+        auto cams = WebcamCapture::enumerate();
+        if (!cams.empty()) {
+            int dot_r    = std::max(3, ui_ref_width() / 110);
+            int hit_sz   = std::max(rail_btn_sz / 2, dot_r * 5);
+            int gap      = std::max(4, dot_r * 2);
+            int total_h  = (int)cams.size() * hit_sz +
+                           (int)std::max<size_t>(0, cams.size() - 1) * gap;
+            int rail_x   = inner_x + inner_w - rail_pad - hit_sz;
+            int rail_y0  = inner_y + (inner_h - total_h) / 2;
+            for (size_t i = 0; i < cams.size(); ++i) {
+                int dx_x = rail_x;
+                int dx_y = rail_y0 + (int)i * (hit_sz + gap);
+                BtnRect r{dx_x, dx_y, hit_sz, hit_sz};
+                webcam_cam_btns_.push_back({cams[i].id, r});
+                bool sel = (cams[i].id == settings_.webcam_device_id) ||
+                           (settings_.webcam_device_id.empty() && i == 0);
+                bool hov = in_rect(mx, my, dx_x, dx_y, hit_sz, hit_sz);
+                // Tuck a darker chip behind the dot so it stays readable
+                // when overlaid on a bright part of the camera frame.
+                SDL_SetRenderDrawColor(sdl_renderer_, 30, 30, 35,
+                                       (uint8_t)(hov ? 180 : 130));
+                fill_circle(sdl_renderer_, dx_x + hit_sz / 2,
+                            dx_y + hit_sz / 2, dot_r + 3);
+                uint8_t a = sel ? 255 : (hov ? 230 : 170);
+                SDL_SetRenderDrawColor(sdl_renderer_, 220, 220, 220, a);
+                fill_circle(sdl_renderer_, dx_x + hit_sz / 2,
+                            dx_y + hit_sz / 2, dot_r);
+                if (sel) {
+                    // Thin selection ring (1 px) just outside the dot.
+                    int ring = dot_r + 2;
+                    int cx = dx_x + hit_sz / 2;
+                    int cy = dx_y + hit_sz / 2;
+                    SDL_SetRenderDrawColor(sdl_renderer_, 240, 240, 240, 220);
+                    for (int dy = -ring; dy <= ring; ++dy) {
+                        for (int dx = -ring; dx <= ring; ++dx) {
+                            int d2 = dx * dx + dy * dy;
+                            if (d2 <= ring * ring &&
+                                d2 >= (ring - 1) * (ring - 1))
+                                SDL_RenderDrawPoint(sdl_renderer_, cx + dx, cy + dy);
+                        }
+                    }
+                }
+                if (hov && tooltip_ready("wcdraw_cam:" + cams[i].id)) {
+                    // Strip non-ASCII so SDL_ttf renders cleanly (matches
+                    // the right-click picker's sanitiser).
+                    std::string label;
+                    label.reserve(cams[i].name.size());
+                    for (unsigned char c : cams[i].name) {
+                        if (c >= 0x20 && c < 0x7F) label.push_back((char)c);
+                        else if (c == ' ' || c == '\t') label.push_back(' ');
+                    }
+                    if (label.empty()) label = "(camera)";
+                    pending_tooltip_text_  = (sel ? "Active: "
+                                                  : "Switch to: ") + label;
+                    // Anchor at the inside (left) edge of the dot so the
+                    // tooltip extends INTO the frame instead of clipping
+                    // off the drawer's right edge.
+                    pending_tooltip_x_      = dx_x;
+                    pending_tooltip_y_      = my; // vertically follow the mouse
+                    pending_tooltip_below_  = false;
+                    pending_tooltip_align_  = 1; // tooltip extends to the LEFT
+                    pending_tooltip_valign_ = 1; // vertically centered on mouse Y
+                }
+            }
+        }
+    }
+#endif
+}
+
+bool Renderer::should_include_webcam_in_capture() const {
+#ifdef ENABLE_WEBCAM
+    return webcam_drawer_visible_
+        && webcam_.is_running()
+        && !webcam_last_rgba_.empty()
+        && webcam_last_w_ > 0 && webcam_last_h_ > 0;
+#else
+    return false;
+#endif
+}
+
+void Renderer::paint_webcam_strip(uint8_t* canvas, int canvas_w,
+                                  int base_h, int panel_h,
+                                  int /*overlap_top*/) const {
+    if (!canvas || canvas_w <= 0 || panel_h <= 0) return;
+
+    // Mirrors draw_webcam_drawer(): the on-screen drawer is inset inside
+    // the phone-bezel corner curves, body filled with drawer_color, then
+    // bordered with a slightly-lightened bezel tint and rounded on the
+    // BOTTOM corners only (top stays flush with the phone). We replicate
+    // that exactly on the CPU canvas so screenshots and recordings show
+    // the webcam framed the same way the user sees it.
+    //
+    // The strip's `base_h` row is the visual TOP of the panel. Callers
+    // can place that row INSIDE the phone composite (passing
+    // `phone_h - overlap`) so the panel slides up behind the phone
+    // bezel — the bezel is alpha-composited on top afterwards and hides
+    // the overlap rows.
+    uint8_t dr, dg, db;
+    const_cast<Renderer*>(this)->drawer_color(dr, dg, db);
+    auto lite = [](uint8_t c, int d) -> uint8_t {
+        int v = (int)c + d; if (v < 0) v = 0; if (v > 255) v = 255;
+        return (uint8_t)v;
+    };
+    uint8_t bzr  = phone_frame_.bezel_r();
+    uint8_t bzg  = phone_frame_.bezel_g();
+    uint8_t bzb  = phone_frame_.bezel_b();
+    uint8_t er   = lite(bzr, 30);
+    uint8_t eg   = lite(bzg, 30);
+    uint8_t eb   = lite(bzb, 32);
+
+    int inset   = canvas_w / 16;
+    int panel_x = inset;
+    int panel_w = canvas_w - inset * 2;
+    if (panel_w < 8) return;
+    int bw = std::max(2, std::min(3, panel_w / 200 + 2));
+    int pr = std::max(8, panel_w / 30);
+    if (pr > panel_h - 1) pr = std::max(2, panel_h - 1);
+
+    auto set_px = [&](int x, int y, uint8_t r, uint8_t g, uint8_t b,
+                      uint8_t a) {
+        if (x < 0 || x >= canvas_w) return;
+        if (y < base_h || y >= base_h + panel_h) return;
+        uint8_t* p = canvas + ((size_t)y * canvas_w + x) * 4;
+        p[0] = r; p[1] = g; p[2] = b; p[3] = a;
+    };
+
+    // 0) Start the strip fully transparent so the inset bands beside the
+    //    panel "hang" off the phone exactly like the on-screen drawer.
+    for (int y = base_h; y < base_h + panel_h; ++y) {
+        memset(canvas + (size_t)y * canvas_w * 4, 0, (size_t)canvas_w * 4);
+    }
+
+    int py_top = base_h;
+    int py_bot = base_h + panel_h - 1;
+    int cy_b   = py_bot - pr;
+    int cx_lc  = panel_x + pr;
+    int cx_rc  = panel_x + panel_w - 1 - pr;
+
+    // 1) Panel body fill (above the corner-centre row, plus the strip
+    //    between the two bottom corners).
+    for (int y = py_top; y < cy_b; ++y)
+        for (int x = panel_x + bw; x < panel_x + panel_w - bw; ++x)
+            set_px(x, y, dr, dg, db, 255);
+    for (int y = cy_b; y <= py_bot - bw; ++y)
+        for (int x = cx_lc; x <= cx_rc; ++x)
+            set_px(x, y, dr, dg, db, 255);
+
+    // 2) Border strips (left / right / bottom-straight segment).
+    for (int y = py_top; y < cy_b; ++y) {
+        for (int dx = 0; dx < bw; ++dx) {
+            set_px(panel_x + dx, y, er, eg, eb, 255);
+            set_px(panel_x + panel_w - 1 - dx, y, er, eg, eb, 255);
+        }
+    }
+    for (int dy = 0; dy < bw; ++dy)
+        for (int x = cx_lc; x <= cx_rc; ++x)
+            set_px(x, py_bot - dy, er, eg, eb, 255);
+
+    // 3) Bottom corners — coverage-based AA, exactly the same recipe as
+    //    draw_webcam_drawer()'s paint_corner lambda. Outer coverage drives
+    //    alpha so the corner anti-aliases against the transparent matte.
+    auto paint_corner = [&](int cx, int cy, int quad) {
+        float r_out = (float)pr;
+        float r_in  = (float)(pr - bw);
+        for (int dy = -pr - 1; dy <= pr + 1; ++dy) {
+            for (int dx = -pr - 1; dx <= pr + 1; ++dx) {
+                if (quad == 2 && !(dx <= 0 && dy >= 0)) continue;
+                if (quad == 3 && !(dx >= 0 && dy >= 0)) continue;
+                float d = std::sqrt((float)(dx * dx + dy * dy));
+                float cov_out = std::clamp(r_out + 0.5f - d, 0.0f, 1.0f);
+                if (cov_out <= 0.0f) continue;
+                float cov_in  = std::clamp(r_in + 0.5f - d, 0.0f, 1.0f);
+                int px = cx + dx;
+                int py = cy + dy;
+                if (cov_in >= 1.0f) {
+                    set_px(px, py, dr, dg, db, 255);
+                } else if (cov_out >= 1.0f && cov_in <= 0.0f) {
+                    set_px(px, py, er, eg, eb, 255);
+                } else {
+                    float body = cov_in;
+                    float ring = std::max(0.0f, cov_out - cov_in);
+                    uint8_t r = (uint8_t)(dr * body + er * ring);
+                    uint8_t g = (uint8_t)(dg * body + eg * ring);
+                    uint8_t b = (uint8_t)(db * body + eb * ring);
+                    uint8_t a = (uint8_t)(cov_out * 255);
+                    set_px(px, py, r, g, b, a);
+                }
+            }
+        }
+    };
+    paint_corner(cx_lc, cy_b, 2);
+    paint_corner(cx_rc, cy_b, 3);
+
+#ifdef ENABLE_WEBCAM
+    // 4) Letterbox the freshest webcam frame inside the bordered inner
+    //    rect (same +2 padding as the on-screen drawer so the image never
+    //    overlaps the rounded corners).
+    if (webcam_last_rgba_.empty() ||
+        webcam_last_w_ <= 0 || webcam_last_h_ <= 0) {
+        return;
+    }
+    int inner_x = panel_x + bw + 2;
+    int inner_y = py_top + bw + 2;
+    int inner_w = panel_w - (bw + 2) * 2;
+    int inner_h = panel_h - (bw + 2) * 2;
+    if (inner_w <= 4 || inner_h <= 4) return;
+
+    float src_ar = (float)webcam_last_w_ / (float)webcam_last_h_;
+    float dst_ar = (float)inner_w / (float)inner_h;
+    int draw_w, draw_h;
+    if (src_ar > dst_ar) {
+        draw_w = inner_w;
+        draw_h = (int)(inner_w / src_ar);
+    } else {
+        draw_h = inner_h;
+        draw_w = (int)(inner_h * src_ar);
+    }
+    int dst_x = inner_x + (inner_w - draw_w) / 2;
+    int dst_y = inner_y + (inner_h - draw_h) / 2;
+    const bool mirror = settings_.webcam_mirror_h;
+
+    for (int y = 0; y < draw_h; ++y) {
+        int sy = (int)((int64_t)y * webcam_last_h_ / draw_h);
+        if (sy < 0) sy = 0;
+        if (sy >= webcam_last_h_) sy = webcam_last_h_ - 1;
+        const uint8_t* src_row =
+            webcam_last_rgba_.data() + (size_t)sy * webcam_last_w_ * 4;
+        uint8_t* dst_row =
+            canvas + (size_t)(dst_y + y) * canvas_w * 4 + (size_t)dst_x * 4;
+        for (int x = 0; x < draw_w; ++x) {
+            int sx = (int)((int64_t)x * webcam_last_w_ / draw_w);
+            if (mirror) sx = webcam_last_w_ - 1 - sx;
+            if (sx < 0) sx = 0;
+            if (sx >= webcam_last_w_) sx = webcam_last_w_ - 1;
+            const uint8_t* sp = src_row + (size_t)sx * 4;
+            dst_row[x * 4 + 0] = sp[0];
+            dst_row[x * 4 + 1] = sp[1];
+            dst_row[x * 4 + 2] = sp[2];
+            dst_row[x * 4 + 3] = 255;
+        }
+    }
+#endif
+}
+
+void Renderer::poll_webcam_frame() {
+    WebcamFrame latest;
+    if (!webcam_.get_latest(latest) ||
+        latest.width <= 0 || latest.height <= 0 || latest.rgba.empty()) {
+        return;
+    }
+
+    // Refresh the GPU texture used by the drawer.
+    if (!webcam_texture_ ||
+        webcam_tex_w_ != latest.width ||
+        webcam_tex_h_ != latest.height) {
+        if (webcam_texture_) {
+            SDL_DestroyTexture(webcam_texture_);
+            webcam_texture_ = nullptr;
+        }
+        webcam_texture_ = SDL_CreateTexture(
+            sdl_renderer_, SDL_PIXELFORMAT_RGBA32,
+            SDL_TEXTUREACCESS_STREAMING, latest.width, latest.height);
+        if (webcam_texture_) {
+            webcam_tex_w_ = latest.width;
+            webcam_tex_h_ = latest.height;
+            SDL_SetTextureBlendMode(webcam_texture_, SDL_BLENDMODE_NONE);
+        } else {
+            webcam_tex_w_ = 0;
+            webcam_tex_h_ = 0;
+        }
+    }
+    if (webcam_texture_) {
+        SDL_UpdateTexture(webcam_texture_, nullptr,
+                          latest.rgba.data(), latest.width * 4);
+    }
+
+    // First valid frame from the active device — clear the crash-guard
+    // marker so the next launch will auto-open as normal.
+    if (!webcam_pending_cleared_) {
+        opm::Settings::clear_webcam_pending();
+        webcam_pending_cleared_ = true;
+    }
+
+    // Keep a CPU copy for the recorder composite path.
+    webcam_last_w_ = latest.width;
+    webcam_last_h_ = latest.height;
+    webcam_last_rgba_ = std::move(latest.rgba);
+}
 
 } // namespace opm::media

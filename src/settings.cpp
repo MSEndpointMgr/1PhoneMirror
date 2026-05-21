@@ -29,6 +29,28 @@ std::string Settings::file_path() {
     return dir + "/settings.ini";
 }
 
+static std::string webcam_pending_path() {
+    std::string dir = settings_dir();
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return dir + "/webcam_pending.lock";
+}
+
+bool Settings::webcam_pending_exists() {
+    std::error_code ec;
+    return std::filesystem::exists(webcam_pending_path(), ec);
+}
+
+void Settings::set_webcam_pending() {
+    std::ofstream f(webcam_pending_path(), std::ios::trunc);
+    if (f.is_open()) f << "1";
+}
+
+void Settings::clear_webcam_pending() {
+    std::error_code ec;
+    std::filesystem::remove(webcam_pending_path(), ec);
+}
+
 static uint8_t clamp_mid_dark(int v) {
     // Restrict to a tasteful mid/dark range so the drawer/text contrast
     // remains readable. 18..160 keeps the bezel from going pure-black or
@@ -69,6 +91,10 @@ Settings Settings::load() {
             else if (k == "record_fps_mp4")               s.record_fps_mp4               = std::clamp(std::stoi(v), 5, 60);
             else if (k == "record_fps_gif")               s.record_fps_gif               = std::clamp(std::stoi(v), 2, 30);
             else if (k == "record_bitrate_kbps")          s.record_bitrate_kbps          = std::clamp(std::stoi(v), 500, 50000);
+            else if (k == "webcam_drawer_open")           s.webcam_drawer_open           = (v == "1" || v == "true");
+            else if (k == "webcam_device_id")             s.webcam_device_id             = v;
+            else if (k == "webcam_mirror_h")              s.webcam_mirror_h              = (v == "1" || v == "true");
+            else if (k == "webcam_include_in_recording") s.webcam_include_in_recording = (v == "1" || v == "true");
         } catch (...) {}
     }
     return s;
@@ -91,6 +117,10 @@ bool Settings::save() const {
     f << "record_fps_mp4="              << record_fps_mp4 << "\n";
     f << "record_fps_gif="              << record_fps_gif << "\n";
     f << "record_bitrate_kbps="         << record_bitrate_kbps << "\n";
+    f << "webcam_drawer_open="          << (webcam_drawer_open          ? "1" : "0") << "\n";
+    f << "webcam_device_id="            << webcam_device_id << "\n";
+    f << "webcam_mirror_h="             << (webcam_mirror_h             ? "1" : "0") << "\n";
+    f << "webcam_include_in_recording=" << (webcam_include_in_recording ? "1" : "0") << "\n";
     return true;
 }
 

@@ -45,8 +45,25 @@ struct Settings {
     // sent. Defaults to false; user enables it from the Settings panel.
     bool telemetry_enabled = true;
 
+    // Webcam drawer (TODO.md #9). Persisted so the user's "show my hands"
+    // preference survives a restart. webcam_device_id is the MF symbolic
+    // link returned by WebcamCapture::enumerate(); empty = system default.
+    bool        webcam_drawer_open         = false;
+    std::string webcam_device_id;
+    bool        webcam_mirror_h            = true;   // selfie-style horizontal flip
+    bool        webcam_include_in_recording = false; // composite in MP4/GIF (M5)
+
     // Returns the path to the settings file (creates the directory if needed).
     static std::string file_path();
+
+    // Crash-guard marker for the webcam auto-start path. We touch a small
+    // sentinel file just before opening the previously-selected camera at
+    // launch, and remove it once a frame arrives. If the next launch finds
+    // the marker still in place it means the prior run crashed inside the
+    // capture stack and we should NOT retry that device automatically.
+    static bool webcam_pending_exists();
+    static void set_webcam_pending();
+    static void clear_webcam_pending();
 
     // Load from disk. Missing/invalid file returns defaults.
     static Settings load();
