@@ -83,16 +83,19 @@ jobs:
           VERSION: ${{ steps.ctx.outputs.version }}
           URL: ${{ steps.ctx.outputs.url }}
         run: |
-          # Install wingetcreate via dotnet tool so it stays current.
-          dotnet tool install --global wingetcreate
-          if ($LASTEXITCODE -ne 0) { throw "wingetcreate install failed" }
-          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
-          wingetcreate --version
+          # Download the latest wingetcreate release binary directly.
+          # `aka.ms/wingetcreate/latest` redirects to the current self-
+          # contained .exe published by microsoft/winget-create.
+          $exe = Join-Path $env:RUNNER_TEMP 'wingetcreate.exe'
+          Invoke-WebRequest -Uri 'https://aka.ms/wingetcreate/latest' `
+                            -OutFile $exe -UseBasicParsing
+          if (-not (Test-Path $exe)) { throw "wingetcreate download failed" }
+          & $exe --version
 
           # `update` automatically forks microsoft/winget-pkgs (if needed),
           # commits the new version manifest, and opens a PR. `--submit`
           # is required for it to actually open the PR.
-          wingetcreate update MSEndpointMgr.1PhoneMirror `
+          & $exe update MSEndpointMgr.1PhoneMirror `
             --version $env:VERSION `
             --urls   $env:URL `
             --submit `
