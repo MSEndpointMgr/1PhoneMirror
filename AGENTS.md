@@ -36,7 +36,6 @@ a Release build before tagging.
 | [installer/](installer) | WiX 5 `.wxs` source + `THIRD_PARTY_LICENSES.txt`. |
 | [scripts/](scripts), [package.ps1](package.ps1) | Build + MSI/Intune packaging. |
 | [telemetry/](telemetry) | **Separate** .NET 8 Azure Functions project — deployed via `azd up`, not part of the C++ build. See [telemetry/README.md](telemetry/README.md). |
-| [signing/](signing) | **Separate** Azure Trusted Signing infra (Bicep, subscription-scope, plain `az deployment` — not `azd`). See [signing/README.md](signing/README.md). |
 | [manifests/](manifests) | winget manifest fork copy (publish via [.github/workflows/winget.yml](.github/workflows/winget.yml)). |
 | [docs/screenshots/](docs/screenshots) | README screenshots only. |
 

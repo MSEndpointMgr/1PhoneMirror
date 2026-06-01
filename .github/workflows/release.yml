@@ -13,16 +13,10 @@ on:
 
 permissions:
   contents: write   # needed to create the GitHub Release
-  id-token: write   # needed for OIDC federation with Azure Trusted Signing
 
 jobs:
   build:
     runs-on: windows-latest
-    # Tag-pushed releases go through the `release` GitHub Environment so
-    # the Trusted Signing federated credential matches and (optionally) a
-    # required reviewer can gate signed builds. Workflow_dispatch runs
-    # without the environment and therefore skip signing.
-    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || '' }}
 
     steps:
       - name: Checkout
@@ -122,30 +116,7 @@ jobs:
           path: dist/1PhoneMirror-${{ steps.ver.outputs.version }}.msi
           retention-days: 5
 
-      # --- Azure Trusted Signing ----------------------------------------
-      # No-op until the `release` GitHub Environment is configured with the
-      # AZURE_TRUSTED_SIGNING_ENDPOINT variable (see signing/README.md).
-      - name: Azure login (OIDC)
-        if: vars.AZURE_TRUSTED_SIGNING_ENDPOINT != ''
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Sign MSI with Azure Trusted Signing
-        if: vars.AZURE_TRUSTED_SIGNING_ENDPOINT != ''
-        uses: azure/trusted-signing-action@v0.5.1
-        with:
-          endpoint: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          trusted-signing-account-name: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
-          files-folder: dist
-          files-folder-filter: msi
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-      # ------------------------------------------------------------------
 
       - name: Compute SHA256 (post-signing)
         id: hash

@@ -150,6 +150,46 @@ window stays compact.
 ---
 
 ## Explicitly NOT planning (already evaluated, low value here)
+
+### Code signing — Azure Trusted Signing (attempted May 2026, abandoned)
+Spent a full sprint trying to set up Azure Trusted Signing (now "Artifact
+Signing") for MSI code-signing. Challenges that made it impossible **from
+Norway** at this time:
+
+1. **Sponsored Azure subscriptions are blocked.** The MVP Subscription
+   (`Sponsored_2016-01-01` quota) failed the billing pre-check with
+   "Unable to connect to the billing service." FAQ explicitly excludes
+   free, trial, and sponsored offers.
+2. **VSE subscription works** (`MSDN_2014-09-01`) — Phase 1 infra
+   (account, UAMI, OIDC federated creds, RBAC) deployed successfully.
+3. **Norway is not supported for Public Trust identity validation.**
+   The country dropdown only lists USA, Canada, EU member states, and UK.
+   Norway is EEA (not EU) and does not appear. Private Trust validation
+   completed fine but can't be used for a `PublicTrust` certificate
+   profile — deployment fails with `BadResourceOperation:
+   PublicTrust certificate requires Public identity validation`.
+4. **No programmatic workaround exists.** Spending-limit removal can
+   only be done in the portal; identity validation is a manual review.
+5. **Support ticket filed** requesting Norway/EEA support — no
+   resolution as of June 2026. Revisit if Microsoft expands the
+   supported country list.
+
+**All Azure resources have been deleted.** The `signing/` folder and
+branch have been removed from the repo. The release workflow no longer
+references Trusted Signing. SignPath references were also removed
+earlier (their free OSS tier rejected the project).
+
+**Alternative paths if code signing is needed later:**
+- Wait for Norway/EEA to be added to Artifact Signing Public Trust.
+- Register a branch office in an EU country (e.g. Sweden) with its
+  own DUNS — use that entity for validation.
+- Buy a traditional OV code-signing certificate from a CA (DigiCert,
+  Sectigo, GlobalSign) — more expensive, manual renewal, but no
+  country restriction.
+
+---
+
+## Explicitly NOT planning (already evaluated, low value here)
 - **Touch passthrough on Android** — scrcpy already does it natively;
   users who need it can run scrcpy directly.
 - **More bezel themes / skins** — pure cosmetics, no business value.
