@@ -54,9 +54,16 @@ bool PhoneFrame::generate(SDL_Renderer* renderer, int screen_w, int screen_h) {
     const uint32_t BEZEL_EDGE     = rgba(lighten(bezel_r_, 30),
                                           lighten(bezel_g_, 30),
                                           lighten(bezel_b_, 32), 255);
-    const uint32_t BUTTON_COLOR   = rgba(lighten(bezel_r_, 16),
-                                          lighten(bezel_g_, 16),
-                                          lighten(bezel_b_, 18), 255);
+    // Side-button shade — must remain distinguishable from the bezel but
+    // subtle enough not to be confused with the app's interactive UI
+    // chrome (menu chips, drawer rails). A small lift on dark bezels and
+    // a small darken on light ones reads as "subtle metallic accent"
+    // rather than "tappable button".
+    int bezel_luma = (bezel_r_ * 30 + bezel_g_ * 59 + bezel_b_ * 11) / 100;
+    int btn_delta  = (bezel_luma < 128) ? 28 : -28;
+    const uint32_t BUTTON_COLOR   = rgba(lighten(bezel_r_, btn_delta),
+                                          lighten(bezel_g_, btn_delta),
+                                          lighten(bezel_b_, btn_delta), 255);
     const uint32_t SCREEN_BORDER  = rgba(lighten(bezel_r_, -8),
                                           lighten(bezel_g_, -8),
                                           lighten(bezel_b_, -8), 255);
@@ -132,25 +139,40 @@ bool PhoneFrame::generate(SDL_Renderer* renderer, int screen_w, int screen_h) {
     //    occupies the full screen area; painting a pill on top would obscure
     //    real content (clock/widgets on iPad, status bar on iPhone).
 
-    // 6. Side buttons (power button on right, volume on left)
+    // 6. Side buttons (power button on right, action+volume on left)
+    //    Heights are 50% longer than the early prototype and the cluster
+    //    sits further down the chassis to match a modern iPhone (15/16):
+    //      * Power: ~28% of screen height, starts ~30% from the top.
+    //      * Action: small button above the volume rockers (~3% tall).
+    //      * Volume up/down: each ~7% tall, slightly below action.
     if (!is_tablet && is_portrait) {
         int btn_w = std::max(3, bezel_side_ / 4);
-        // Power button (right side, upper-middle)
-        int pwr_h = std::max(20, static_cast<int>(screen_h_ * 0.065f));
-        int pwr_y = bezel_top_ + static_cast<int>(screen_h_ * 0.22f);
-        draw_rect(frame_pixels_, frame_w_, frame_h_,
-                  frame_w_ - btn_w, pwr_y, btn_w, pwr_h, BUTTON_COLOR);
 
-        // Volume up (left side)
-        int vol_h = std::max(14, static_cast<int>(screen_h_ * 0.045f));
-        int vol_up_y = bezel_top_ + static_cast<int>(screen_h_ * 0.18f);
+        // Action button (left side, above volume) — small.
+        int act_h    = std::max(8, static_cast<int>(screen_h_ * 0.030f));
+        int act_y    = bezel_top_ + static_cast<int>(screen_h_ * 0.17f);
+        draw_rect(frame_pixels_, frame_w_, frame_h_,
+                  0, act_y, btn_w, act_h, BUTTON_COLOR);
+
+        // Volume up (left side) — 50% longer, moved further down.
+        int vol_h    = std::max(21, static_cast<int>(screen_h_ * 0.0675f));
+        int vol_up_y = act_y + act_h + std::max(6, vol_h / 3);
         draw_rect(frame_pixels_, frame_w_, frame_h_,
                   0, vol_up_y, btn_w, vol_h, BUTTON_COLOR);
 
-        // Volume down (left side, below up)
+        // Volume down (left side, below up).
         int vol_dn_y = vol_up_y + vol_h + std::max(4, vol_h / 3);
         draw_rect(frame_pixels_, frame_w_, frame_h_,
                   0, vol_dn_y, btn_w, vol_h, BUTTON_COLOR);
+
+        // Power button (right side) — 50% longer; bottom aligned with
+        // the bottom of the lower volume button to match real iPhone
+        // proportions where the power and volume-down ends sit at the
+        // same height on the chassis.
+        int pwr_h = std::max(30, static_cast<int>(screen_h_ * 0.0975f));
+        int pwr_y = (vol_dn_y + vol_h) - pwr_h;
+        draw_rect(frame_pixels_, frame_w_, frame_h_,
+                  frame_w_ - btn_w, pwr_y, btn_w, pwr_h, BUTTON_COLOR);
     }
 
     // Create SDL texture from pixels

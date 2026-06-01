@@ -855,6 +855,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
+        version_lines_.push_back(make_ver(L"01.06.2026 \u2013 0.5.1", 34, 200, 200, 255));
+        version_lines_.push_back(make_desc(L"Bezel side buttons: action button, better sizing & visibility"));
+        version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"21.05.2026 \u2013 0.5.0", 34, 200, 200, 255));
         version_lines_.push_back(make_desc(L"Webcam drawer (W): slide-out camera panel, WYSIWYG screenshots/recording"));
         version_lines_.push_back({nullptr, 0, 0});

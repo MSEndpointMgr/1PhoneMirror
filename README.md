@@ -144,6 +144,7 @@ button on the menu (or use the Windows file dialog) to open it.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **0.5.1** | 01.06.2026 | Bezel side buttons: action button, better sizing & visibility. |
 | **0.5.0** | 21.05.2026 | **Webcam drawer** (`W`) — a landscape camera panel that slides out of the phone's bottom bezel, matching the log panel's drawer style. Lists Media Foundation cameras (right-click the bottom `W` button to pick one), live preview at the camera's native resolution, optional horizontal mirror. Screenshots (`Ctrl+S`) and screen recordings (`Ctrl+R`) capture the phone + webcam as one framed composite — WYSIWYG. In-drawer **screenshot button** (left) saves the webcam frame on its own (`<date> <time> Webcam.png`) and right-edge **camera-switch dots** flip between connected cameras. Crash-guard skips webcam auto-start after a failed launch so a bad camera can't lock the app. Version-history panel (`V`) scrollbar is now click-draggable. |
 | **0.4.2** | 20.05.2026 | New capture file naming convention `<date> <time> <function>` (e.g. `2026-05-20 14-32-07 Screenshot.png`, `2026-05-20 14-32-07 Recording.mp4`) so screenshots and recordings sort chronologically in Explorer. |
 | **0.4.1** | 18.05.2026 | **Open screenshots in Snagit Editor** — new third output toggle alongside *Save to folder* and *Copy to clipboard*. Auto-detects any installed Snagit version (registry + Program Files); shows a warning toast if Snagit isn't installed when enabled. |
