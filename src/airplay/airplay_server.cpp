@@ -233,14 +233,14 @@ bool AirPlayServer::start(const Config& config) {
     rtsp_.on_method("POST", [this](const auto& req) -> network::RtspResponse {
         try {
             // Route POST based on URI — order matters: more-specific paths first.
-            // Managed (MDM-locked) iPads use the legacy AirPlay 1 SRP-6a PIN
-            // flow (/pair-pin-start + /pair-setup-pin) when an AirPlay password
-            // is enforced. Unmanaged devices use HomeKit pair-setup (HAP TLV8)
-            // via /pair-setup. Check the more-specific PIN paths first.
-            if (req.uri.find("/pair-pin-start") != std::string::npos)
-                return handle_pair_pin_start(req);
-            if (req.uri.find("/pair-setup-pin") != std::string::npos)
-                return handle_pair_setup_pin(req);
+            // Legacy AirPlay 1 PIN flow (/pair-pin-start + /pair-setup-pin)
+            // is intentionally NOT routed. Apple's modern iPadOS no longer
+            // implements the published SRP-6a/SHA-1/AES-CBC variant (verified
+            // 03.06.2026: client M1 never matches any documented permutation
+            // of padded/unpadded N, salt, A, B, K). We instead advertise
+            // HomeKit feature bits in mDNS so iOS picks /pair-setup (HAP)
+            // and pair-verify (HAP M5). Returning 404 here forces the iPad
+            // to retry with HAP rather than hang in the dead SRP-6a exchange.
             if (req.uri.find("/pair-setup") != std::string::npos)
                 return handle_pair_setup(req);
             if (req.uri.find("/pair-verify") != std::string::npos)
