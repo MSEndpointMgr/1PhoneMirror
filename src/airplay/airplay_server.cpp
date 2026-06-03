@@ -199,6 +199,24 @@ bool AirPlayServer::start(const Config& config) {
         return false;
     }
 
+    // Initialize HomeKit pair-setup state machine + generate the 8-digit
+    // setup code. The code is shown on screen via the PIN display callback
+    // until the user dismisses it; controllers that complete pair-setup
+    // can then reconnect via pair-verify without ever showing the code again.
+    hap_pair_setup_ = std::make_unique<HapPairSetup>(hap_device_);
+    {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<int> d(0, 99999999);
+        char code[12];
+        int n = d(gen);
+        std::snprintf(code, sizeof(code), "%03d-%02d-%03d",
+                      n / 100000, (n / 1000) % 100, n % 1000);
+        hap_setup_code_ = code;
+        std::cout << "[HAP] setup code: " << hap_setup_code_ << "\n";
+        if (on_pin_display_) on_pin_display_(hap_setup_code_);
+    }
+
     // Initialize decoder for H.264 (AirPlay mirroring uses H.264)
     if (!decoder_.init_video(AV_CODEC_ID_H264)) {
         std::cerr << "[AirPlay] Failed to init video decoder\n";
@@ -470,6 +488,37 @@ network::RtspResponse AirPlayServer::handle_info(const network::RtspRequest& req
 
 network::RtspResponse AirPlayServer::handle_pair_setup(const network::RtspRequest& req) {
     network::RtspResponse resp;
+
+    // Route HomeKit pair-setup (HAP TLV8) vs. legacy AirPlay-1 pair-setup
+    // (a single 32-byte Ed25519 public key as the entire body).
+    //   - HAP requests advertise Content-Type: application/pairing+tlv8 and
+    //     the body starts with the TLV State tag (0x06 0x01 0x0?).
+    //   - Legacy requests are exactly 32 bytes with no TLV framing.
+    bool is_hap = false;
+    auto ct = req.headers.find("Content-Type");
+    if (ct == req.headers.end()) ct = req.headers.find("content-type");
+    if (ct != req.headers.end() && ct->second.find("tlv8") != std::string::npos) {
+        is_hap = true;
+    } else if (req.body.size() != 32 && req.body.size() >= 3 &&
+               req.body[0] == 0x06 && req.body[1] == 0x01) {
+        is_hap = true;
+    }
+
+    if (is_hap && hap_pair_setup_) {
+        auto out = hap_pair_setup_->handle(req.body, hap_setup_code_);
+        if (out.empty()) {
+            resp.status_code = 500;
+            std::cerr << "[AirPlay] HAP pair-setup produced empty response\n";
+            return resp;
+        }
+        resp.status_code = 200;
+        resp.headers["Content-Type"] = "application/pairing+tlv8";
+        resp.body = std::move(out);
+        if (hap_pair_setup_->is_complete()) {
+            std::cout << "[AirPlay] HAP pair-setup complete — controller paired\n";
+        }
+        return resp;
+    }
 
     auto response_data = pairing_.pair_setup(req.body.data(),
                                               static_cast<int>(req.body.size()));

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <opm/airplay/hap_device.h>
+#include <opm/airplay/hap_pairing.h>
 #include <opm/airplay/mdns_service.h>
 #include <opm/airplay/mirror_buffer.h>
 #include <opm/airplay/pairing.h>
@@ -153,6 +154,12 @@ private:
     bool require_pin_ = false;
     bool srp_active_ = false;
     OnPinDisplay on_pin_display_;
+
+    // HomeKit pair-setup (HAP TLV8 over /pair-setup). One handler instance
+    // per server — HAP spec allows only one pair-setup in flight at a time.
+    // The setup code is generated at start() and displayed via on_pin_display_.
+    std::unique_ptr<HapPairSetup> hap_pair_setup_;
+    std::string hap_setup_code_;
 
     std::atomic<bool> running_{false};
     // Guards against double-stop. Both App::shutdown() and ~AirPlayServer
