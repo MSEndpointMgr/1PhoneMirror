@@ -191,6 +191,14 @@ bool AirPlayServer::start(const Config& config) {
         return false;
     }
 
+    // Load (or first-run-generate) the persistent HAP device identity.
+    // Provides the stable pi/pk advertised in mDNS and the Ed25519 key used
+    // to sign HomeKit pair-setup / pair-verify proofs.
+    if (!hap_device_.load_or_create()) {
+        std::cerr << "[AirPlay] Failed to load HAP device identity\n";
+        return false;
+    }
+
     // Initialize decoder for H.264 (AirPlay mirroring uses H.264)
     if (!decoder_.init_video(AV_CODEC_ID_H264)) {
         std::cerr << "[AirPlay] Failed to init video decoder\n";
@@ -273,7 +281,8 @@ bool AirPlayServer::start(const Config& config) {
     }
 
     // Advertise via mDNS
-    if (!mdns_.register_airplay(config_.server_name, config_.port, hw_addr_, require_pin_)) {
+    if (!mdns_.register_airplay(config_.server_name, config_.port, hw_addr_,
+                                 hap_device_.pi(), hap_device_.ltpk_hex())) {
         std::cerr << "[AirPlay] Warning: mDNS registration failed, "
                   << "devices may not discover this receiver automatically\n";
     }

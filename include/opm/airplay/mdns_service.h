@@ -23,12 +23,15 @@ public:
     // Register the AirPlay + RAOP services
     // server_name: display name shown on iOS devices
     // port: TCP port the AirPlay server is listening on
-    // hw_addr: 6-byte MAC address (used as device ID)
-    // require_pin: advertise password-required (pw=true, flags=0x44)
-    //              so iOS prompts for an on-screen PIN.
+    // hw_addr: 6-byte MAC address (used as the legacy AirPlay "deviceid" TXT;
+    //          NOT used as the HAP pairing identifier)
+    // pi: HAP pairing identifier from HapDevice (e.g. "4a:9c:2f:11:88:b0"),
+    //     must be stable across restarts
+    // pk_hex: 64-char lowercase hex of the device's Ed25519 long-term public key
     bool register_airplay(const std::string& server_name, uint16_t port,
                           const uint8_t hw_addr[6],
-                          bool require_pin = false);
+                          const std::string& pi,
+                          const std::string& pk_hex);
 
     void unregister();
 

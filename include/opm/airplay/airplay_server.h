@@ -1,5 +1,6 @@
 #pragma once
 
+#include <opm/airplay/hap_device.h>
 #include <opm/airplay/mdns_service.h>
 #include <opm/airplay/mirror_buffer.h>
 #include <opm/airplay/pairing.h>
@@ -103,6 +104,7 @@ private:
     void timing_loop();
 
     MdnsService mdns_;
+    HapDevice hap_device_;
     network::RtspServer rtsp_;
     media::Decoder decoder_;
 
