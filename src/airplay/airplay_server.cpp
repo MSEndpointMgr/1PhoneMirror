@@ -242,6 +242,13 @@ bool AirPlayServer::start(const Config& config) {
             // HomeKit feature bits in mDNS so iOS picks /pair-setup (HAP)
             // and pair-verify (HAP M5). Returning 404 here forces the iPad
             // to retry with HAP rather than hang in the dead SRP-6a exchange.
+            // Order matters - the legacy URIs (/pair-pin-start and
+            // /pair-setup-pin) are substrings of /pair-setup, so check them
+            // FIRST and 404 them. That forces the iPad to retry on HAP
+            // /pair-setup instead of hanging in the dead SRP-6a exchange.
+            if (req.uri.find("/pair-pin-start") != std::string::npos ||
+                req.uri.find("/pair-setup-pin") != std::string::npos)
+                return handle_default(req);
             if (req.uri.find("/pair-setup") != std::string::npos)
                 return handle_pair_setup(req);
             if (req.uri.find("/pair-verify") != std::string::npos)
@@ -369,9 +376,13 @@ network::RtspResponse AirPlayServer::handle_info(const network::RtspRequest& req
     // macAddress (same as deviceID for AirPlay)
     root.push_back({w.add_string("macAddress"), w.add_string(device_id)});
 
-    // features — 64-bit (low 32 | high 32)
-    // 0x5A7FFEE6 = low 32, 0x1E = high 32 (supports FairPlay, etc.)
-    uint64_t features = 0x5A7FFEE6;
+    // features: 64-bit (low 32 | high 32). MUST match the mDNS advertisement
+    // in mdns_service.cpp or iOS picks the legacy path even after we drop
+    // bit 27 in mDNS, because /info trumps the TXT record. Low 0x527FFEE6
+    // clears bit 27 SupportsLegacyPairing; high 0x94D40 sets the HomeKit
+    // pairing bits (38/40/41/43/46/48/51) that route the iPad onto HAP
+    // /pair-setup + /pair-verify.
+    uint64_t features = (static_cast<uint64_t>(0x94D40ULL) << 32) | 0x527FFEE6ULL;
     root.push_back({w.add_string("features"), w.add_uint(features)});
 
     // model
@@ -386,17 +397,12 @@ network::RtspResponse AirPlayServer::handle_info(const network::RtspRequest& req
     // sourceVersion
     root.push_back({w.add_string("sourceVersion"), w.add_string("220.68")});
 
-    // pk (32 bytes raw Ed25519 public key)
-    const char* pk_hex = "b07727d6f6cd6e08b58ede525ec3cdeaa252ad9f683feb212ef8a205246554e7";
-    std::vector<uint8_t> pk_raw;
-    for (int i = 0; i < 64; i += 2) {
-        char hex[3] = {pk_hex[i], pk_hex[i+1], 0};
-        pk_raw.push_back(static_cast<uint8_t>(strtol(hex, nullptr, 16)));
-    }
+    // pk: real persisted Ed25519 LTPK from HapDevice (must match mDNS TXT).
+    const auto& pk_raw = hap_device_.ltpk();
     root.push_back({w.add_string("pk"), w.add_data(pk_raw.data(), pk_raw.size())});
 
-    // pi
-    root.push_back({w.add_string("pi"), w.add_string("2e388006-13ba-4041-9a67-25dd4a43d536")});
+    // pi: real persisted pairing identifier from HapDevice (matches mDNS TXT).
+    root.push_back({w.add_string("pi"), w.add_string(hap_device_.pi())});
 
     // vv
     root.push_back({w.add_string("vv"), w.add_uint(2)});
