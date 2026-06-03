@@ -1,5 +1,6 @@
 #include <opm/airplay/airplay_server.h>
 #include <opm/airplay/bplist.h>
+#include <opm/airplay/tlv8.h>
 #include <opm/config.h>
 #include <algorithm>
 #include <chrono>
@@ -498,28 +499,33 @@ network::RtspResponse AirPlayServer::handle_info(const network::RtspRequest& req
 network::RtspResponse AirPlayServer::handle_pair_setup(const network::RtspRequest& req) {
     network::RtspResponse resp;
 
-    // Route HomeKit pair-setup (HAP TLV8) vs. legacy AirPlay-1 pair-setup
-    // (a single 32-byte Ed25519 public key as the entire body).
-    //   - HAP requests advertise Content-Type: application/pairing+tlv8 and
-    //     the body starts with the TLV State tag (0x06 0x01 0x0?).
-    //   - Legacy requests are exactly 32 bytes with no TLV framing.
-    bool is_hap = false;
-    auto ct = req.headers.find("Content-Type");
-    if (ct == req.headers.end()) ct = req.headers.find("content-type");
-    if (ct != req.headers.end() && ct->second.find("tlv8") != std::string::npos) {
-        is_hap = true;
-    } else if (req.body.size() != 32 && req.body.size() >= 3 &&
-               req.body[0] == 0x06 && req.body[1] == 0x01) {
-        is_hap = true;
+    // /pair-setup is HAP-only in this build. Modern iPadOS sends TLV8 here
+    // (Method=PairSetup may come before State, so we cannot rely on a fixed
+    // leading byte). The legacy AirPlay-1 32-byte-Ed25519-key pair-setup is
+    // gone: the mDNS + /info feature mask no longer advertises bit 27
+    // SupportsLegacyPairing, so any client reaching this endpoint has already
+    // committed to HomeKit and is sending TLV8.
+    {
+        auto ct = req.headers.find("Content-Type");
+        if (ct == req.headers.end()) ct = req.headers.find("content-type");
+        std::cout << "[HAP] /pair-setup body=" << req.body.size() << "B"
+                  << " ct=" << (ct == req.headers.end() ? std::string("(none)") : ct->second)
+                  << "\n";
     }
 
-    if (is_hap && hap_pair_setup_) {
-        // First HAP M1 — surface the setup code so the user can type it on
-        // the controller. Subsequent M3/M5 messages don't re-display.
-        if (!hap_pair_setup_->is_complete() && on_pin_display_ &&
-            req.body.size() >= 3 && req.body[2] == 0x01) {
-            std::cout << "[HAP] setup code: " << hap_setup_code_ << "\n";
-            on_pin_display_(hap_setup_code_);
+    if (hap_pair_setup_) {
+        // First HAP M1 - surface the setup code so the user can type it on
+        // the controller. Detect M1 by parsing the TLV and looking for
+        // State=1; robust to TLV field ordering.
+        if (!hap_pair_setup_->is_complete() && on_pin_display_) {
+            TlvReader rd;
+            if (rd.parse(req.body)) {
+                auto st = rd.get_u8(TlvType::State);
+                if (st && *st == 0x01) {
+                    std::cout << "[HAP] setup code: " << hap_setup_code_ << "\n";
+                    on_pin_display_(hap_setup_code_);
+                }
+            }
         }
         auto out = hap_pair_setup_->handle(req.body, hap_setup_code_);
         if (out.empty()) {
@@ -536,20 +542,10 @@ network::RtspResponse AirPlayServer::handle_pair_setup(const network::RtspReques
         return resp;
     }
 
-    auto response_data = pairing_.pair_setup(req.body.data(),
-                                              static_cast<int>(req.body.size()));
-    if (response_data.empty()) {
-        resp.status_code = 500;
-        resp.reason = "Internal Server Error";
-        std::cerr << "[AirPlay] pair-setup failed\n";
-        return resp;
-    }
-
-    resp.status_code = 200;
-    resp.headers["Content-Type"] = "application/octet-stream";
-    resp.body = std::move(response_data);
-
-    std::cout << "[AirPlay] Pair-setup: returned " << resp.body.size() << "-byte Ed25519 public key\n";
+    // HAP not initialized - hard fail. Legacy SRP-6a pair-setup path is gone.
+    resp.status_code = 500;
+    resp.reason = "Internal Server Error";
+    std::cerr << "[AirPlay] /pair-setup: HAP not initialized\n";
     return resp;
 }
 
@@ -557,80 +553,40 @@ network::RtspResponse AirPlayServer::handle_pair_verify(const network::RtspReque
     network::RtspResponse resp;
     resp.status_code = 200;
 
-    // Route HomeKit pair-verify (HAP TLV8 M1/M3) vs. legacy AirPlay-1
-    // pair-verify (raw bytes, leading phase=1 or 0). HAP requests advertise
-    // Content-Type: application/pairing+tlv8, or start with a TLV State item
-    // (0x06 0x01 0x01 for M1, 0x06 0x01 0x03 for M3).
+    // /pair-verify is HAP-only in this build. See handle_pair_setup() for
+    // rationale. Detection logging only.
     {
-        bool is_hap = false;
         auto ct = req.headers.find("Content-Type");
         if (ct == req.headers.end()) ct = req.headers.find("content-type");
-        if (ct != req.headers.end() && ct->second.find("tlv8") != std::string::npos) {
-            is_hap = true;
-        } else if (req.body.size() >= 3 && req.body[0] == 0x06 &&
-                   req.body[1] == 0x01 &&
-                   (req.body[2] == 0x01 || req.body[2] == 0x03)) {
-            is_hap = true;
-        }
-        if (is_hap && hap_pair_verify_) {
-            auto out = hap_pair_verify_->handle(req.body);
-            if (out.empty()) {
-                resp.status_code = 500;
-                std::cerr << "[AirPlay] HAP pair-verify produced empty response\n";
-                return resp;
-            }
-            resp.status_code = 200;
-            resp.headers["Content-Type"] = "application/pairing+tlv8";
-            resp.body = std::move(out);
-            if (hap_pair_verify_->is_complete()) {
-                std::cout << "[AirPlay] HAP pair-verify complete - session keys ready for M6 encrypted framing\n";
-                // Promote THIS RTSP socket to encrypted framing immediately
-                // after the (plaintext) M4 response goes out.
-                resp.promote_hap_read_key  = hap_pair_verify_->read_key();
-                resp.promote_hap_write_key = hap_pair_verify_->write_key();
-                // Drop verify state so a future re-pair on a different socket
-                // starts clean. Already-derived keys above remain valid in
-                // the response copy.
-                hap_pair_verify_->reset();
-            }
-            return resp;
-        }
+        std::cout << "[HAP] /pair-verify body=" << req.body.size() << "B"
+                  << " ct=" << (ct == req.headers.end() ? std::string("(none)") : ct->second)
+                  << "\n";
     }
 
-    if (req.body.size() < 4) {
-        resp.status_code = 400;
+    if (hap_pair_verify_) {
+        auto out = hap_pair_verify_->handle(req.body);
+        if (out.empty()) {
+            resp.status_code = 500;
+            std::cerr << "[AirPlay] HAP pair-verify produced empty response\n";
+            return resp;
+        }
+        resp.status_code = 200;
+        resp.headers["Content-Type"] = "application/pairing+tlv8";
+        resp.body = std::move(out);
+        if (hap_pair_verify_->is_complete()) {
+            std::cout << "[AirPlay] HAP pair-verify complete - session keys ready for M6 encrypted framing\n";
+            // Promote THIS RTSP socket to encrypted framing immediately
+            // after the (plaintext) M4 response goes out.
+            resp.promote_hap_read_key  = hap_pair_verify_->read_key();
+            resp.promote_hap_write_key = hap_pair_verify_->write_key();
+            hap_pair_verify_->reset();
+        }
         return resp;
     }
 
-    uint8_t phase = req.body[0];
-
-    if (phase == 1) {
-        // Phase 1: X25519 ECDH key exchange + Ed25519 signature
-        auto response_data = pairing_.pair_verify_phase1(req.body.data(),
-                                                          static_cast<int>(req.body.size()));
-        if (response_data.empty()) {
-            resp.status_code = 500;
-            std::cerr << "[AirPlay] pair-verify phase 1 failed\n";
-            return resp;
-        }
-        resp.headers["Content-Type"] = "application/octet-stream";
-        resp.body = std::move(response_data);
-        std::cout << "[AirPlay] Pair-verify phase 1: ECDH exchange (" << resp.body.size() << " bytes)\n";
-    } else if (phase == 0) {
-        // Phase 2: Verify client's signature
-        if (!pairing_.pair_verify_phase2(req.body.data(),
-                                          static_cast<int>(req.body.size()))) {
-            resp.status_code = 500;
-            std::cerr << "[AirPlay] pair-verify phase 2 failed\n";
-            return resp;
-        }
-        resp.headers["Content-Type"] = "application/octet-stream";
-        std::cout << "[AirPlay] Pair-verify phase 2: verified OK\n";
-    } else {
-        std::cerr << "[AirPlay] pair-verify: unknown phase " << (int)phase << "\n";
-        resp.status_code = 400;
-    }
-
+    resp.status_code = 500;
+    resp.reason = "Internal Server Error";
+    std::cerr << "[AirPlay] /pair-verify: HAP not initialized\n";
     return resp;
 }
 
