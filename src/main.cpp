@@ -9,6 +9,7 @@
 #include <opm/airplay/hap_srp.h>
 #include <opm/airplay/hap_pairing.h>
 #include <opm/airplay/hap_verify.h>
+#include <opm/airplay/hap_session.h>
 #include <opm/settings.h>
 #include <opm/media/webcam.h>
 #ifdef ENABLE_ANDROID
@@ -311,6 +312,9 @@ int main(int argc, char* argv[]) {
             return ok ? 0 : 2;
         } else if (arg == "--hap-verify-self-test") {
             bool ok = opm::airplay::hap_verify_self_test();
+            return ok ? 0 : 2;
+        } else if (arg == "--hap-session-self-test") {
+            bool ok = opm::airplay::hap_session_self_test();
             return ok ? 0 : 2;
         } else if (arg == "--list-webcams") {
             auto cams = opm::media::WebcamCapture::enumerate();

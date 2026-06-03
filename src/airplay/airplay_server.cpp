@@ -578,6 +578,14 @@ network::RtspResponse AirPlayServer::handle_pair_verify(const network::RtspReque
             resp.body = std::move(out);
             if (hap_pair_verify_->is_complete()) {
                 std::cout << "[AirPlay] HAP pair-verify complete - session keys ready for M6 encrypted framing\n";
+                // Promote THIS RTSP socket to encrypted framing immediately
+                // after the (plaintext) M4 response goes out.
+                resp.promote_hap_read_key  = hap_pair_verify_->read_key();
+                resp.promote_hap_write_key = hap_pair_verify_->write_key();
+                // Drop verify state so a future re-pair on a different socket
+                // starts clean. Already-derived keys above remain valid in
+                // the response copy.
+                hap_pair_verify_->reset();
             }
             return resp;
         }

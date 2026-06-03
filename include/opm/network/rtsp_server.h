@@ -1,11 +1,15 @@
 #pragma once
 
 #include <opm/network/tcp_server.h>
+#include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
+
+namespace opm::airplay { class HapSession; }
 
 namespace opm::network {
 
@@ -27,6 +31,13 @@ struct RtspResponse {
     std::string reason = "OK";
     std::map<std::string, std::string> headers;
     std::vector<uint8_t> body;
+
+    // HAP session promotion: if both keys are 32B, RtspServer wraps this
+    // socket in ChaCha20-Poly1305 framing immediately AFTER this response
+    // is sent (the response itself goes out plaintext). Set by the HAP
+    // /pair-verify M4 handler.
+    std::vector<uint8_t> promote_hap_read_key;
+    std::vector<uint8_t> promote_hap_write_key;
 };
 
 using RtspHandler = std::function<RtspResponse(const RtspRequest& req)>;
@@ -49,9 +60,28 @@ public:
     void disconnect_ip(const std::string& ip);
 
 private:
+    // Per-client read state. Owns the optional HAP encrypted session plus a
+    // plaintext queue that absorbs whole decrypted HAP frames so line/exact
+    // readers can pull arbitrary byte counts across frame boundaries.
+    struct ClientCtx {
+        socket_t sock = INVALID_SOCK;
+        std::unique_ptr<opm::airplay::HapSession> hap;
+        std::vector<uint8_t> plain_buf;
+        size_t               plain_off = 0;
+    };
+
     void handle_client(socket_t client, const std::string& addr);
-    RtspRequest parse_request(socket_t client);
-    void send_response(socket_t client, const RtspRequest& req, const RtspResponse& resp);
+    RtspRequest parse_request(ClientCtx& ctx);
+    void send_response(ClientCtx& ctx, const RtspRequest& req, const RtspResponse& resp);
+
+    bool   recv_exact_ctx(ClientCtx& ctx, uint8_t* buf, int len);
+    std::string recv_line_ctx(ClientCtx& ctx);
+    bool   send_bytes_ctx(ClientCtx& ctx, const uint8_t* buf, size_t len);
+    bool   send_string_ctx(ClientCtx& ctx, const std::string& s) {
+        return send_bytes_ctx(ctx,
+            reinterpret_cast<const uint8_t*>(s.data()), s.size());
+    }
+    bool   pump_one_frame(ClientCtx& ctx);
 
     TcpServer tcp_;
     std::map<std::string, RtspHandler> handlers_;
