@@ -128,10 +128,10 @@ bool App::init(const Config& config) {
         ap_config.port = AIRPLAY_PORT;
         ap_config.mirror_port = AIRPLAY_MIRROR_PORT;
 
-        airplay_.set_require_pin(config_.airplay_require_pin);
-        airplay_.set_pin_display_callback([this](const std::string& pin) {
-            renderer_.set_pin_code(pin);
-        });
+        // AirPlay PIN pairing (legacy SRP-6a over plist) does not work with
+        // modern iOS — see investigate/airplay-pin-2026-06. The handlers and
+        // overlay code remain on disk as scaffolding for a future HomeKit
+        // pair-setup (HAP) implementation but are no longer wired up.
 
         // Multi-source picker wiring (AirPlay sources + Android, when active)
         renderer_.set_source_provider(

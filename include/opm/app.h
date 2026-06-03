@@ -37,7 +37,6 @@ public:
         bool enable_miracast = true;
         bool enable_cast = true;
         bool enable_android = true;
-        bool airplay_require_pin = false;
 
         // Android (scrcpy) — auto-detected at startup if these are set.
         std::string android_adb_path;          // path to adb.exe (empty = PATH)

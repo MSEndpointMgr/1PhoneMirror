@@ -207,7 +207,6 @@ void print_usage(const char* argv0) {
               << "  --no-airplay       Disable AirPlay (iOS) receiver\n"
               << "  --no-miracast      Disable Miracast (Android) receiver\n"
               << "  --no-android       Disable Android (scrcpy) receiver\n"
-              << "  --airplay-pin      Require on-screen PIN for AirPlay (managed iOS)\n"
               << "\nAndroid (scrcpy) options:\n"
               << "  --android-pair <ip:port> <code>   One-time pair via Wireless Debugging\n"
               << "  --android-connect <ip:port>       Connect to a paired device, then exit\n"
@@ -286,8 +285,6 @@ int main(int argc, char* argv[]) {
             std::cout << msg;
             return ok ? 0 : 2;
 #endif
-        } else if (arg == "--airplay-pin") {
-            config.airplay_require_pin = true;
         } else if (arg == "--srp-self-test") {
             bool ok = opm::airplay::srp_pin_self_test();
             return ok ? 0 : 2;

@@ -4,7 +4,7 @@ An open-source screen-mirroring receiver for Windows that lets an iPhone or
 an Android phone show up inside a phone-shaped window on your PC — no app
 installed on the phone, no cables.
 
-- **iOS / iPadOS / macOS** — native AirPlay (Screen Mirroring), with optional PIN pairing.
+- **iOS / iPadOS / macOS** — native AirPlay (Screen Mirroring) for unmanaged devices.
 - **Android** — Wireless Debugging via the bundled `adb` + `scrcpy-server.jar`.
 - **Miracast** — Wi-Fi Direct receiver (experimental, Windows-only).
 - **Capture** — one-click screenshots (PNG) and screen recording (MP4 or GIF) straight into a phone-framed picture or clip — perfect for documentation.
@@ -87,7 +87,11 @@ Or grab the latest MSI directly from
 ### iPhone / iPad / Mac (AirPlay)
 1. PC and phone on the **same Wi-Fi**.
 2. Phone: **Control Center → Screen Mirroring → 1PhoneMirror**.
-3. If PIN pairing is enabled, type the PIN shown on the PC.
+
+> **MDM-managed iPads / iPhones:** modern iOS uses HomeKit pair-setup
+> (HAP) for AirPlay, which 1PhoneMirror does not yet implement. Managed
+> devices that require a receiver PIN will not connect. Tracking issue
+> for the HAP rewrite is open on GitHub.
 
 ### Android (Wireless Debugging)
 1. Phone: **Settings → Developer options → Wireless debugging** → enable.
@@ -195,8 +199,8 @@ screenshot and the relevant lines from the in-app log (`L`).
 
 | Component | State |
 |-----------|-------|
-| AirPlay 2 — RTSP + mDNS + FairPlay + multi-source | Working |
-| AirPlay PIN pairing | Working |
+| AirPlay 2 — RTSP + mDNS + FairPlay + multi-source | Working (unmanaged iOS) |
+| AirPlay HomeKit pair-setup (HAP) — for managed iOS / receiver PIN | Planned |
 | Android — ADB pair/connect + scrcpy v3 stream | Working |
 | Screenshots (PNG) | Working |
 | Screen recording (MP4 H.264, GIF) | Working |

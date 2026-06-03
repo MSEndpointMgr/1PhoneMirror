@@ -208,10 +208,11 @@ bool AirPlayServer::start(const Config& config) {
     rtsp_.on_method("POST", [this](const auto& req) -> network::RtspResponse {
         try {
             // Route POST based on URI — order matters: more-specific paths first.
-            if (req.uri.find("/pair-pin-start") != std::string::npos)
-                return handle_pair_pin_start(req);
-            if (req.uri.find("/pair-setup-pin") != std::string::npos)
-                return handle_pair_setup_pin(req);
+            // NOTE: /pair-pin-start and /pair-setup-pin (legacy AirPlay 1 SRP-6a
+            // PIN pairing) are intentionally unrouted — modern iOS uses HomeKit
+            // pair-setup (HAP) which we don't yet implement. Letting these
+            // requests fall through to handle_default returns 404 so the iPad
+            // doesn't get stuck waiting on an SRP exchange we can't complete.
             if (req.uri.find("/pair-setup") != std::string::npos)
                 return handle_pair_setup(req);
             if (req.uri.find("/pair-verify") != std::string::npos)
