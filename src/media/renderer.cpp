@@ -8561,20 +8561,16 @@ void Renderer::draw_pin_overlay() {
     }
     if (pin != pin_digits_cached_) {
         if (pin_digits_tex_) { SDL_DestroyTexture(pin_digits_tex_); pin_digits_tex_ = nullptr; }
-        // Letter-spaced for readability ("1 2 3 4")
-        std::string spaced;
-        for (size_t i = 0; i < pin.size(); ++i) {
-            if (i) spaced += ' ';
-            spaced += pin[i];
-        }
-        pin_digits_tex_ = make_text_texture(sdl_renderer_, spaced,
-                                             140, 255, 255, 255,
+        // Render the code as-is (dashes already provide visual grouping).
+        pin_digits_tex_ = make_text_texture(sdl_renderer_, pin,
+                                             72, 255, 255, 255,
                                              &pin_digits_w_, &pin_digits_h_);
         pin_digits_cached_ = pin;
     }
 
-    // Centered card with semi-transparent dark backdrop.
-    int card_w = std::max(420, std::max(pin_digits_w_, pin_note_w_) + 80);
+    // Centered card with semi-transparent dark backdrop, clamped to window.
+    int card_w = std::max(360, std::max(pin_digits_w_, pin_note_w_) + 60);
+    if (card_w > win_w - 20) card_w = win_w - 20;
     int card_h = pin_label_h_ + pin_digits_h_ + pin_note_h_ + 96;
     int card_x = (win_w - card_w) / 2;
     int card_y = (win_h - card_h) / 2;
