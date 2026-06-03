@@ -3,6 +3,7 @@
 #include <opm/log_buffer.h>
 #include <opm/network/tcp_server.h>
 #include <opm/airplay/srp_pin.h>
+#include <opm/airplay/tlv8.h>
 #include <opm/settings.h>
 #include <opm/media/webcam.h>
 #ifdef ENABLE_ANDROID
@@ -287,6 +288,9 @@ int main(int argc, char* argv[]) {
 #endif
         } else if (arg == "--srp-self-test") {
             bool ok = opm::airplay::srp_pin_self_test();
+            return ok ? 0 : 2;
+        } else if (arg == "--tlv8-self-test") {
+            bool ok = opm::airplay::tlv8_self_test();
             return ok ? 0 : 2;
         } else if (arg == "--list-webcams") {
             auto cams = opm::media::WebcamCapture::enumerate();
