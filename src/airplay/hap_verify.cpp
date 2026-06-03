@@ -146,6 +146,20 @@ std::vector<uint8_t> HapPairVerify::handle(const std::vector<uint8_t>& in_tlv) {
 
     if (*st == 0x01) {
         // ---- M1 → M2 -------------------------------------------------------
+
+        // If no controllers are paired yet, we MUST refuse pair-verify so
+        // the iPad falls through to /pair-setup. Replying M2 successfully
+        // would lead iPad to look up our pairing ID in its keychain, fail,
+        // and give up (it then falls back to legacy /pair-pin-start, which
+        // we don't implement). Returning Authentication here causes iPad
+        // to retry on /pair-setup immediately.
+        if (HapPairingStore::instance().list_ids().empty()) {
+            std::cerr << "[HAP] pair-verify M1: no paired controllers; "
+                         "returning Authentication so client switches to /pair-setup\n";
+            impl_->clear();
+            return err_tlv(0x02, TlvError::Authentication);
+        }
+
         auto cpub = rd.get(TlvType::PublicKey);
         if (!cpub || cpub->size() != 32) {
             std::cerr << "[HAP] pair-verify M1: bad PublicKey\n";
