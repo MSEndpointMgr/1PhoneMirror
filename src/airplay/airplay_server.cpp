@@ -408,8 +408,12 @@ network::RtspResponse AirPlayServer::handle_info(const network::RtspRequest& req
     // vv
     root.push_back({w.add_string("vv"), w.add_uint(2)});
 
-    // statusFlags
-    root.push_back({w.add_string("statusFlags"), w.add_uint(68)});
+    // statusFlags: 0x44 (audio cable attached + AirPlay 2) PLUS 0x200
+    // (OneTimePairingRequired) so iPadOS knows it must run HomeKit
+    // pair-setup. Without 0x200 the iPad assumes we're already paired,
+    // attempts /pair-verify, and on failure falls back to legacy
+    // /pair-pin-start instead of /pair-setup.
+    root.push_back({w.add_string("statusFlags"), w.add_uint(0x244)});
 
     // keepAliveLowPower
     root.push_back({w.add_string("keepAliveLowPower"), w.add_uint(1)});

@@ -503,9 +503,13 @@ bool MdnsService::register_airplay(const std::string& server_name, uint16_t port
             // 40 BufferedAudio, 41 PTP, 43 SystemPairing, 46 HKPairingAndAccessControl,
             // 48 TransientPairing, 51 UnifiedPairSetupAndMFi.
             {"features", "0x527FFEE6,0x94D40"},
-            // flags=0x4 = AirPlay capable. PIN/password modes (0x8, 0x44) are
-            // not advertised — modern iOS uses HomeKit pair-setup instead.
-            {"flags", "0x4"},
+            // flags: 0x4 = AirPlay capable, 0x200 = HomeKit pairing required
+            // (a.k.a. "OneTimePairingRequired"). Without bit 9 the iPad
+            // assumes we're already paired and only tries /pair-verify; it
+            // then silently falls back to legacy /pair-pin-start instead of
+            // /pair-setup. Setting 0x204 tells iPadOS "I'm a HomeKit
+            // accessory that has not been set up yet — go run pair-setup."
+            {"flags", "0x204"},
             {"model", "AppleTV3,2"},
             {"pi", pi},
             {"pk", pk_hex},
@@ -531,7 +535,7 @@ bool MdnsService::register_airplay(const std::string& server_name, uint16_t port
                 {"et", "0,3,5"}, {"ft", "0x527FFEE6,0x94D40"}, {"md", "0,1,2"},
                 {"pk", pk_hex},
                 {"pw", "false"}, {"rhd", "5.6.0.0"},
-                {"sf", "0x4"},
+                {"sf", "0x204"},
                 {"sr", "44100"}, {"ss", "16"}, {"sv", "false"}, {"tp", "UDP"},
                 {"txtvers", "1"}, {"vn", "65537"}, {"vs", "220.68"}, {"vv", "2"},
             });
@@ -579,7 +583,7 @@ bool MdnsService::register_airplay(const std::string& server_name, uint16_t port
     impl_->airplay_txt = build_txt_payload({
         {"deviceid", device_id},
         {"features", "0x527FFEE6,0x94D40"},
-        {"flags", "0x4"},
+        {"flags", "0x204"},
         {"model", "AppleTV3,2"},
         {"pi", pi},
         {"pk", pk_hex},
@@ -592,7 +596,7 @@ bool MdnsService::register_airplay(const std::string& server_name, uint16_t port
         {"et", "0,3,5"}, {"ft", "0x527FFEE6,0x94D40"}, {"md", "0,1,2"},
         {"pk", pk_hex},
         {"pw", "false"}, {"rhd", "5.6.0.0"},
-        {"sf", "0x4"},
+        {"sf", "0x204"},
         {"sr", "44100"}, {"ss", "16"}, {"sv", "false"}, {"tp", "UDP"},
         {"txtvers", "1"}, {"vn", "65537"}, {"vs", "220.68"}, {"vv", "2"},
     });
