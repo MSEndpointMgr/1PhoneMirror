@@ -79,6 +79,8 @@ if(ENABLE_AIRPLAY)
         src/airplay/srp_pin.cpp
         src/airplay/tlv8.cpp
         src/airplay/hap_device.cpp
+        src/airplay/hap_crypto.cpp
+        src/airplay/hap_srp.cpp
         src/airplay/bplist.cpp
         src/airplay/mirror_buffer.cpp
         lib/playfair/playfair.c

@@ -5,6 +5,8 @@
 #include <opm/airplay/srp_pin.h>
 #include <opm/airplay/tlv8.h>
 #include <opm/airplay/hap_device.h>
+#include <opm/airplay/hap_crypto.h>
+#include <opm/airplay/hap_srp.h>
 #include <opm/settings.h>
 #include <opm/media/webcam.h>
 #ifdef ENABLE_ANDROID
@@ -295,6 +297,12 @@ int main(int argc, char* argv[]) {
             return ok ? 0 : 2;
         } else if (arg == "--hap-self-test") {
             bool ok = opm::airplay::hap_device_self_test();
+            return ok ? 0 : 2;
+        } else if (arg == "--hap-crypto-self-test") {
+            bool ok = opm::airplay::hap_crypto_self_test();
+            return ok ? 0 : 2;
+        } else if (arg == "--hap-srp-self-test") {
+            bool ok = opm::airplay::hap_srp_self_test();
             return ok ? 0 : 2;
         } else if (arg == "--list-webcams") {
             auto cams = opm::media::WebcamCapture::enumerate();
