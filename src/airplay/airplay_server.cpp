@@ -203,7 +203,8 @@ bool AirPlayServer::start(const Config& config) {
     // setup code. The code is shown on screen via the PIN display callback
     // until the user dismisses it; controllers that complete pair-setup
     // can then reconnect via pair-verify without ever showing the code again.
-    hap_pair_setup_ = std::make_unique<HapPairSetup>(hap_device_);
+    hap_pair_setup_  = std::make_unique<HapPairSetup>(hap_device_);
+    hap_pair_verify_ = std::make_unique<HapPairVerify>(hap_device_);
     {
         std::random_device rd;
         std::mt19937 gen(rd());
@@ -549,6 +550,38 @@ network::RtspResponse AirPlayServer::handle_pair_setup(const network::RtspReques
 network::RtspResponse AirPlayServer::handle_pair_verify(const network::RtspRequest& req) {
     network::RtspResponse resp;
     resp.status_code = 200;
+
+    // Route HomeKit pair-verify (HAP TLV8 M1/M3) vs. legacy AirPlay-1
+    // pair-verify (raw bytes, leading phase=1 or 0). HAP requests advertise
+    // Content-Type: application/pairing+tlv8, or start with a TLV State item
+    // (0x06 0x01 0x01 for M1, 0x06 0x01 0x03 for M3).
+    {
+        bool is_hap = false;
+        auto ct = req.headers.find("Content-Type");
+        if (ct == req.headers.end()) ct = req.headers.find("content-type");
+        if (ct != req.headers.end() && ct->second.find("tlv8") != std::string::npos) {
+            is_hap = true;
+        } else if (req.body.size() >= 3 && req.body[0] == 0x06 &&
+                   req.body[1] == 0x01 &&
+                   (req.body[2] == 0x01 || req.body[2] == 0x03)) {
+            is_hap = true;
+        }
+        if (is_hap && hap_pair_verify_) {
+            auto out = hap_pair_verify_->handle(req.body);
+            if (out.empty()) {
+                resp.status_code = 500;
+                std::cerr << "[AirPlay] HAP pair-verify produced empty response\n";
+                return resp;
+            }
+            resp.status_code = 200;
+            resp.headers["Content-Type"] = "application/pairing+tlv8";
+            resp.body = std::move(out);
+            if (hap_pair_verify_->is_complete()) {
+                std::cout << "[AirPlay] HAP pair-verify complete - session keys ready for M6 encrypted framing\n";
+            }
+            return resp;
+        }
+    }
 
     if (req.body.size() < 4) {
         resp.status_code = 400;

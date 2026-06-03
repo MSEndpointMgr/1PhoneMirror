@@ -2,6 +2,7 @@
 
 #include <opm/airplay/hap_device.h>
 #include <opm/airplay/hap_pairing.h>
+#include <opm/airplay/hap_verify.h>
 #include <opm/airplay/mdns_service.h>
 #include <opm/airplay/mirror_buffer.h>
 #include <opm/airplay/pairing.h>
@@ -160,6 +161,11 @@ private:
     // The setup code is generated at start() and displayed via on_pin_display_.
     std::unique_ptr<HapPairSetup> hap_pair_setup_;
     std::string hap_setup_code_;
+
+    // HomeKit pair-verify (HAP TLV8 over /pair-verify). Distinct from the
+    // legacy AirPlay 1 /pair-verify path (handled inline by pairing_) — we
+    // pick which one based on Content-Type / TLV magic at request time.
+    std::unique_ptr<HapPairVerify> hap_pair_verify_;
 
     std::atomic<bool> running_{false};
     // Guards against double-stop. Both App::shutdown() and ~AirPlayServer

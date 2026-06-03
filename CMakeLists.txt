@@ -82,6 +82,7 @@ if(ENABLE_AIRPLAY)
         src/airplay/hap_crypto.cpp
         src/airplay/hap_srp.cpp
         src/airplay/hap_pairing.cpp
+        src/airplay/hap_verify.cpp
         src/airplay/bplist.cpp
         src/airplay/mirror_buffer.cpp
         lib/playfair/playfair.c
