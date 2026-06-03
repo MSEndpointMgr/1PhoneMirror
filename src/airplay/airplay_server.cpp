@@ -318,14 +318,6 @@ bool AirPlayServer::start(const Config& config) {
 
     std::cout << "[AirPlay] Server started: " << config_.server_name
               << " (port " << config_.port << ")\n";
-
-    // Surface the HomeKit setup code immediately so the user can type it
-    // when iPadOS prompts. The callback also fires on every HAP M1 (in case
-    // the overlay was dismissed) and is cleared when pair-setup completes.
-    if (on_pin_display_) {
-        std::cout << "[HAP] setup code: " << hap_setup_code_ << "\n";
-        on_pin_display_(hap_setup_code_);
-    }
     return true;
 }
 
@@ -518,22 +510,24 @@ network::RtspResponse AirPlayServer::handle_pair_setup(const network::RtspReques
         if (ct == req.headers.end()) ct = req.headers.find("content-type");
         std::cout << "[HAP] /pair-setup body=" << req.body.size() << "B"
                   << " ct=" << (ct == req.headers.end() ? std::string("(none)") : ct->second)
-                  << "\n";
+                  << " hex=";
+        size_t n = std::min<size_t>(req.body.size(), 32);
+        for (size_t i = 0; i < n; ++i) {
+            std::cout << std::hex << std::setw(2) << std::setfill('0')
+                      << (int)req.body[i] << " ";
+        }
+        std::cout << std::dec << "\n";
     }
 
     if (hap_pair_setup_) {
-        // First HAP M1 - surface the setup code so the user can type it on
-        // the controller. Detect M1 by parsing the TLV and looking for
-        // State=1; robust to TLV field ordering.
+        // Show the setup code whenever a pair-setup exchange is in progress.
+        // The TLV State field is not a reliable trigger (iPad sometimes
+        // re-sends, parse may fail mid-flow) so we display on every
+        // /pair-setup hit until pairing completes. The same code is reused
+        // for the whole exchange, so re-displaying is harmless.
         if (!hap_pair_setup_->is_complete() && on_pin_display_) {
-            TlvReader rd;
-            if (rd.parse(req.body)) {
-                auto st = rd.get_u8(TlvType::State);
-                if (st && *st == 0x01) {
-                    std::cout << "[HAP] setup code: " << hap_setup_code_ << "\n";
-                    on_pin_display_(hap_setup_code_);
-                }
-            }
+            std::cout << "[HAP] setup code: " << hap_setup_code_ << "\n";
+            on_pin_display_(hap_setup_code_);
         }
         auto out = hap_pair_setup_->handle(req.body, hap_setup_code_);
         if (out.empty()) {
