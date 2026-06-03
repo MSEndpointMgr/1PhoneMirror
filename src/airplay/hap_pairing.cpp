@@ -282,9 +282,14 @@ std::vector<uint8_t> HapPairSetup::handle(const std::vector<uint8_t>& in_tlv,
         auto A_opt = r.get(TlvType::PublicKey);
         auto M_opt = r.get(TlvType::Proof);
         if (!A_opt || !M_opt) {
+            std::cerr << "[HAP] pair-setup M3: missing TLV fields (A="
+                      << (A_opt ? (int)A_opt->size() : -1)
+                      << ", M=" << (M_opt ? (int)M_opt->size() : -1) << ")\n";
             impl_->state = Impl::S::Failed;
             return err_tlv(0x04, TlvError::Authentication);
         }
+        std::cerr << "[HAP] pair-setup M3: A.size=" << A_opt->size()
+                  << " M.size=" << M_opt->size() << "\n";
         auto M2 = impl_->srp.verify_client_proof(*A_opt, *M_opt);
         if (M2.empty()) {
             std::cerr << "[HAP] pair-setup M3: client proof rejected (wrong setup code?)\n";

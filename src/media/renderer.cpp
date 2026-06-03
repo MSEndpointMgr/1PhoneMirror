@@ -8572,14 +8572,22 @@ void Renderer::draw_pin_overlay() {
     int card_w = std::max(360, std::max(pin_digits_w_, pin_note_w_) + 60);
     if (card_w > win_w - 20) card_w = win_w - 20;
     int card_h = pin_label_h_ + pin_digits_h_ + pin_note_h_ + 96;
-    int card_x = (win_w - card_w) / 2;
-    int card_y = (win_h - card_h) / 2;
+    // Position the card within the phone frame area only (don't cover the log).
+    int area_x = frame_dst_x_;
+    int area_y = frame_dst_y_;
+    int area_w = frame_dst_w_;
+    int area_h = frame_dst_h_;
+    // Fallback when frame hasn't been computed yet.
+    if (area_w <= 0 || area_h <= 0) { area_x = 0; area_y = 0; area_w = win_w; area_h = win_h; }
+    if (card_w > area_w - 10) card_w = area_w - 10;
+    int card_x = area_x + (area_w - card_w) / 2;
+    int card_y = area_y + (area_h - card_h) / 2;
 
     SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
 
-    // Dim the screen behind the card.
+    // Dim only the phone frame area behind the card.
     SDL_SetRenderDrawColor(sdl_renderer_, 0, 0, 0, 160);
-    SDL_Rect bg = {0, 0, win_w, win_h};
+    SDL_Rect bg = {area_x, area_y, area_w, area_h};
     SDL_RenderFillRect(sdl_renderer_, &bg);
 
     // Card background.

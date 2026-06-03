@@ -5,6 +5,7 @@
 #include <openssl/rand.h>
 
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 
@@ -103,15 +104,22 @@ BnUp compute_u(const BIGNUM* A, const BIGNUM* B) {
 }
 
 // M1 = H( H(N) XOR H(g) | H(I) | salt | A | B | K )
+// Per SRP-6a / HAP R2: H(N) and H(g) hash the minimal big-endian integer
+// representation (NOT zero-padded).  N is already full-width (384B) but g=5
+// is just 1 byte (0x05). A and B ARE padded to N's width.
 std::vector<uint8_t> compute_M1(const BIGNUM* N, const BIGNUM* g,
                                  const std::string& I,
                                  const std::vector<uint8_t>& salt,
                                  const BIGNUM* A, const BIGNUM* B,
                                  const std::vector<uint8_t>& K) {
+    // H(N): N is 384 bytes (full 3072-bit prime), minimal = padded here.
     auto Nb = bn_to_padded(N);
-    auto gb = bn_to_padded(g);
     auto hN = sha512(Nb.data(), Nb.size());
-    auto hg = sha512(gb.data(), gb.size());
+    // H(g): minimal byte representation of g (for g=5 this is {0x05}).
+    int g_len = BN_num_bytes(g);
+    std::vector<uint8_t> g_min(g_len);
+    BN_bn2bin(g, g_min.data());
+    auto hg = sha512(g_min.data(), g_min.size());
     std::vector<uint8_t> hN_xor_hg(hN.size());
     for (size_t i = 0; i < hN.size(); ++i) hN_xor_hg[i] = hN[i] ^ hg[i];
     auto hI = sha512(reinterpret_cast<const uint8_t*>(I.data()), I.size());
@@ -207,8 +215,16 @@ std::vector<uint8_t> HapSrpServer::verify_client_proof(
     const std::vector<uint8_t>& A_bytes,
     const std::vector<uint8_t>& M1_client) {
 
+    std::cerr << "[HAP-SRP] verify_client_proof: A.size=" << A_bytes.size()
+              << " M1.size=" << M1_client.size()
+              << " expected_A=" << kPrimeLen
+              << " expected_M1=" << SHA512_DIGEST_LENGTH << "\n";
+
     if (!impl_->started || A_bytes.size() != kPrimeLen ||
         M1_client.size() != SHA512_DIGEST_LENGTH) {
+        std::cerr << "[HAP-SRP] early reject: started=" << impl_->started
+                  << " A_ok=" << (A_bytes.size() == kPrimeLen)
+                  << " M1_ok=" << (M1_client.size() == SHA512_DIGEST_LENGTH) << "\n";
         return {};
     }
     CtxUp ctx(BN_CTX_new());
@@ -241,6 +257,13 @@ std::vector<uint8_t> HapSrpServer::verify_client_proof(
                                  impl_->salt, A.get(), impl_->B.get(), K_);
     if (M1_server.size() != M1_client.size() ||
         CRYPTO_memcmp(M1_server.data(), M1_client.data(), M1_server.size()) != 0) {
+        std::cerr << "[HAP-SRP] M1 mismatch! server_M1[0..7]=";
+        for (int i = 0; i < 8 && i < (int)M1_server.size(); ++i)
+            std::cerr << std::hex << std::setw(2) << std::setfill('0') << (int)M1_server[i];
+        std::cerr << " client_M1[0..7]=";
+        for (int i = 0; i < 8 && i < (int)M1_client.size(); ++i)
+            std::cerr << std::hex << std::setw(2) << std::setfill('0') << (int)M1_client[i];
+        std::cerr << std::dec << "\n";
         K_.clear();
         return {};
     }
