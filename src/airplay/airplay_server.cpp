@@ -213,8 +213,7 @@ bool AirPlayServer::start(const Config& config) {
         std::snprintf(code, sizeof(code), "%03d-%02d-%03d",
                       n / 100000, (n / 1000) % 100, n % 1000);
         hap_setup_code_ = code;
-        std::cout << "[HAP] setup code: " << hap_setup_code_ << "\n";
-        if (on_pin_display_) on_pin_display_(hap_setup_code_);
+        std::cout << "[HAP] setup code generated (shown on first HomeKit pair-setup request)\n";
     }
 
     // Initialize decoder for H.264 (AirPlay mirroring uses H.264)
@@ -234,11 +233,14 @@ bool AirPlayServer::start(const Config& config) {
     rtsp_.on_method("POST", [this](const auto& req) -> network::RtspResponse {
         try {
             // Route POST based on URI — order matters: more-specific paths first.
-            // NOTE: /pair-pin-start and /pair-setup-pin (legacy AirPlay 1 SRP-6a
-            // PIN pairing) are intentionally unrouted — modern iOS uses HomeKit
-            // pair-setup (HAP) which we don't yet implement. Letting these
-            // requests fall through to handle_default returns 404 so the iPad
-            // doesn't get stuck waiting on an SRP exchange we can't complete.
+            // Managed (MDM-locked) iPads use the legacy AirPlay 1 SRP-6a PIN
+            // flow (/pair-pin-start + /pair-setup-pin) when an AirPlay password
+            // is enforced. Unmanaged devices use HomeKit pair-setup (HAP TLV8)
+            // via /pair-setup. Check the more-specific PIN paths first.
+            if (req.uri.find("/pair-pin-start") != std::string::npos)
+                return handle_pair_pin_start(req);
+            if (req.uri.find("/pair-setup-pin") != std::string::npos)
+                return handle_pair_setup_pin(req);
             if (req.uri.find("/pair-setup") != std::string::npos)
                 return handle_pair_setup(req);
             if (req.uri.find("/pair-verify") != std::string::npos)
@@ -505,6 +507,13 @@ network::RtspResponse AirPlayServer::handle_pair_setup(const network::RtspReques
     }
 
     if (is_hap && hap_pair_setup_) {
+        // First HAP M1 — surface the setup code so the user can type it on
+        // the controller. Subsequent M3/M5 messages don't re-display.
+        if (!hap_pair_setup_->is_complete() && on_pin_display_ &&
+            req.body.size() >= 3 && req.body[2] == 0x01) {
+            std::cout << "[HAP] setup code: " << hap_setup_code_ << "\n";
+            on_pin_display_(hap_setup_code_);
+        }
         auto out = hap_pair_setup_->handle(req.body, hap_setup_code_);
         if (out.empty()) {
             resp.status_code = 500;
