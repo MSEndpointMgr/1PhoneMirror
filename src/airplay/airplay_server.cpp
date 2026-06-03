@@ -318,6 +318,14 @@ bool AirPlayServer::start(const Config& config) {
 
     std::cout << "[AirPlay] Server started: " << config_.server_name
               << " (port " << config_.port << ")\n";
+
+    // Surface the HomeKit setup code immediately so the user can type it
+    // when iPadOS prompts. The callback also fires on every HAP M1 (in case
+    // the overlay was dismissed) and is cleared when pair-setup completes.
+    if (on_pin_display_) {
+        std::cout << "[HAP] setup code: " << hap_setup_code_ << "\n";
+        on_pin_display_(hap_setup_code_);
+    }
     return true;
 }
 
@@ -538,6 +546,7 @@ network::RtspResponse AirPlayServer::handle_pair_setup(const network::RtspReques
         resp.body = std::move(out);
         if (hap_pair_setup_->is_complete()) {
             std::cout << "[AirPlay] HAP pair-setup complete — controller paired\n";
+            if (on_pin_display_) on_pin_display_("");
         }
         return resp;
     }
