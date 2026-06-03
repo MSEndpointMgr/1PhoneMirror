@@ -223,6 +223,12 @@ bool App::init(const Config& config) {
             if (active_source_.compare_exchange_strong(expected, static_cast<int>(Source::None)))
                 renderer_.request_reset();
         });
+        // Surface AirPlay pairing PINs (legacy 4-digit /pair-pin-start or
+        // HomeKit 8-digit setup code) on screen via the renderer overlay.
+        // Empty string clears the overlay (sent on pairing success/failure).
+        airplay_.set_pin_display_callback([this](const std::string& pin) {
+            renderer_.set_pin_code(pin);
+        });
     }
 #endif
 
