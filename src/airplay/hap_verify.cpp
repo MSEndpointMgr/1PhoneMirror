@@ -146,6 +146,16 @@ std::vector<uint8_t> HapPairVerify::handle(const std::vector<uint8_t>& in_tlv) {
 
     if (*st == 0x01) {
         // ---- M1 → M2 -------------------------------------------------------
+        // If no controllers are paired, refuse immediately with an error.
+        // This signals "I have no pairings, do pair-setup first" rather than
+        // producing a successful-looking M2 that the controller can't verify
+        // (it has no stored LTPK for us). Sending a false-success here can
+        // cause iPadOS to mark us as broken and refuse pair-setup afterwards.
+        if (HapPairingStore::instance().list_ids().empty()) {
+            std::cout << "[HAP] pair-verify M1: no pairings stored — returning error\n";
+            return err_tlv(0x02, TlvError::Authentication);
+        }
+
         auto cpub = rd.get(TlvType::PublicKey);
         if (!cpub || cpub->size() != 32) {
             std::cerr << "[HAP] pair-verify M1: bad PublicKey\n";
@@ -273,11 +283,14 @@ std::vector<uint8_t> HapPairVerify::handle(const std::vector<uint8_t>& in_tlv) {
             return err_tlv(0x04, TlvError::Authentication);
         }
 
-        // Derive RTSP/event-channel keys for HAP M6 encrypted framing.
+        // Derive RTSP/event-channel keys for HAP encrypted framing.
+        // Names are from the CONTROLLER's perspective (per HAP spec):
+        //   "Control-Read-Encryption-Key"  → controller reads → accessory WRITES
+        //   "Control-Write-Encryption-Key" → controller writes → accessory READS
         impl_->read_key = hkdf_sha512(
-            "Control-Salt", impl_->shared, "Control-Read-Encryption-Key", 32);
-        impl_->write_key = hkdf_sha512(
             "Control-Salt", impl_->shared, "Control-Write-Encryption-Key", 32);
+        impl_->write_key = hkdf_sha512(
+            "Control-Salt", impl_->shared, "Control-Read-Encryption-Key", 32);
         if (impl_->read_key.size() != 32 || impl_->write_key.size() != 32) {
             impl_->state = Impl::S::Failed;
             return err_tlv(0x04, TlvError::Unknown);

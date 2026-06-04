@@ -218,6 +218,9 @@ bool AirPlayServer::start(const Config& config) {
         std::cout << "[HAP] setup code generated (shown on first HomeKit pair-setup request)\n";
     }
 
+    std::cout << "[HAP] paired controllers loaded: "
+              << HapPairingStore::instance().list_ids().size() << "\n";
+
     // Initialize decoder for H.264 (AirPlay mirroring uses H.264)
     if (!decoder_.init_video(AV_CODEC_ID_H264)) {
         std::cerr << "[AirPlay] Failed to init video decoder\n";
@@ -235,21 +238,18 @@ bool AirPlayServer::start(const Config& config) {
     rtsp_.on_method("POST", [this](const auto& req) -> network::RtspResponse {
         try {
             // Route POST based on URI — order matters: more-specific paths first.
-            // Legacy AirPlay 1 PIN flow (/pair-pin-start + /pair-setup-pin)
-            // is intentionally NOT routed. Apple's modern iPadOS no longer
-            // implements the published SRP-6a/SHA-1/AES-CBC variant (verified
-            // 03.06.2026: client M1 never matches any documented permutation
-            // of padded/unpadded N, salt, A, B, K). We instead advertise
-            // HomeKit feature bits in mDNS so iOS picks /pair-setup (HAP)
-            // and pair-verify (HAP M5). Returning 404 here forces the iPad
-            // to retry with HAP rather than hang in the dead SRP-6a exchange.
-            // Order matters - the legacy URIs (/pair-pin-start and
-            // /pair-setup-pin) are substrings of /pair-setup, so check them
-            // FIRST and 404 them. That forces the iPad to retry on HAP
-            // /pair-setup instead of hanging in the dead SRP-6a exchange.
+            // /pair-pin-start and /pair-setup-pin are the legacy AirPlay 1 SRP-6a
+            // PIN flow. They no longer work against modern iPadOS (see commits
+            // fe2e0f4 / 83c45a8). We advertise HomeKit pairing bits in mDNS so iOS
+            // uses HAP /pair-setup (TLV8) instead; 404 the legacy URIs so iOS
+            // doesn't fall back and clobber our HAP setup-code display with a
+            // bogus 4-digit PIN.
             if (req.uri.find("/pair-pin-start") != std::string::npos ||
-                req.uri.find("/pair-setup-pin") != std::string::npos)
-                return handle_default(req);
+                req.uri.find("/pair-setup-pin") != std::string::npos) {
+                network::RtspResponse resp;
+                resp.status_code = 404;
+                return resp;
+            }
             if (req.uri.find("/pair-setup") != std::string::npos)
                 return handle_pair_setup(req);
             if (req.uri.find("/pair-verify") != std::string::npos)
@@ -377,13 +377,11 @@ network::RtspResponse AirPlayServer::handle_info(const network::RtspRequest& req
     // macAddress (same as deviceID for AirPlay)
     root.push_back({w.add_string("macAddress"), w.add_string(device_id)});
 
-    // features: 64-bit (low 32 | high 32). MUST match the mDNS advertisement
-    // in mdns_service.cpp or iOS picks the legacy path even after we drop
-    // bit 27 in mDNS, because /info trumps the TXT record. Low 0x527FFEE6
-    // clears bit 27 SupportsLegacyPairing; high 0x94D40 sets the HomeKit
-    // pairing bits (38/40/41/43/46/48/51) that route the iPad onto HAP
-    // /pair-setup + /pair-verify.
-    uint64_t features = (static_cast<uint64_t>(0x94D40ULL) << 32) | 0x527FFEE6ULL;
+    // features — 64-bit mask matching mDNS. Low half 0x527FFEE6 clears
+    // bit 27 (SupportsLegacyPairing); high half 0x94D40 sets the HomeKit
+    // pairing bits (HKPairingAndAccessControl, TransientPairing, etc.) so
+    // iOS picks HAP /pair-setup (TLV8) over the broken legacy SRP path.
+    uint64_t features = 0x00094D40527FFEE6ULL;
     root.push_back({w.add_string("features"), w.add_uint(features)});
 
     // model
@@ -395,25 +393,30 @@ network::RtspResponse AirPlayServer::handle_info(const network::RtspRequest& req
     // protovers
     root.push_back({w.add_string("protovers"), w.add_string("1.1")});
 
-    // sourceVersion
+    // sourceVersion — 220.68 triggers NTP timing path (not PTP).
+    // HAP pair-setup/verify works independently of this value.
     root.push_back({w.add_string("sourceVersion"), w.add_string("220.68")});
 
-    // pk: real persisted Ed25519 LTPK from HapDevice (must match mDNS TXT).
-    const auto& pk_raw = hap_device_.ltpk();
-    root.push_back({w.add_string("pk"), w.add_data(pk_raw.data(), pk_raw.size())});
+    // pk (32 bytes raw Ed25519 public key) — needed for transient pairing
+    {
+        std::string pk_hex_str = hap_device_.ltpk_hex();
+        std::vector<uint8_t> pk_raw;
+        for (size_t i = 0; i + 1 < pk_hex_str.size(); i += 2) {
+            char hex[3] = {pk_hex_str[i], pk_hex_str[i+1], 0};
+            pk_raw.push_back(static_cast<uint8_t>(strtol(hex, nullptr, 16)));
+        }
+        root.push_back({w.add_string("pk"), w.add_data(pk_raw.data(), pk_raw.size())});
+    }
 
-    // pi: real persisted pairing identifier from HapDevice (matches mDNS TXT).
+    // pi: pairing identifier (matches mDNS TXT).
     root.push_back({w.add_string("pi"), w.add_string(hap_device_.pi())});
 
-    // vv
+    // vv (protocol version indicator)
     root.push_back({w.add_string("vv"), w.add_uint(2)});
 
-    // statusFlags: 0x44 (audio cable attached + AirPlay 2) PLUS 0x200
-    // (OneTimePairingRequired) so iPadOS knows it must run HomeKit
-    // pair-setup. Without 0x200 the iPad assumes we're already paired,
-    // attempts /pair-verify, and on failure falls back to legacy
-    // /pair-pin-start instead of /pair-setup.
-    root.push_back({w.add_string("statusFlags"), w.add_uint(0x244)});
+    // statusFlags = 68 (0x44). With 0x204 the iPad sometimes never sends
+    // /pair-setup; keeping the original value works for iPhone.
+    root.push_back({w.add_string("statusFlags"), w.add_uint(68)});
 
     // keepAliveLowPower
     root.push_back({w.add_string("keepAliveLowPower"), w.add_uint(1)});
@@ -503,12 +506,27 @@ network::RtspResponse AirPlayServer::handle_info(const network::RtspRequest& req
 network::RtspResponse AirPlayServer::handle_pair_setup(const network::RtspRequest& req) {
     network::RtspResponse resp;
 
-    // /pair-setup is HAP-only in this build. Modern iPadOS sends TLV8 here
-    // (Method=PairSetup may come before State, so we cannot rely on a fixed
-    // leading byte). The legacy AirPlay-1 32-byte-Ed25519-key pair-setup is
-    // gone: the mDNS + /info feature mask no longer advertises bit 27
-    // SupportsLegacyPairing, so any client reaching this endpoint has already
-    // committed to HomeKit and is sending TLV8.
+    // Detect legacy transient pair-setup: client sends a raw 32-byte Ed25519
+    // public key (not TLV8). This is used by iPhones that don't require PIN.
+    // TLV8 always starts with a type byte (0x00-0x0A) followed by length;
+    // a raw 32-byte key will typically have byte[1] != the right TLV length.
+    if (req.body.size() == 32) {
+        auto response_data = pairing_.pair_setup(req.body.data(),
+                                                 static_cast<int>(req.body.size()));
+        if (response_data.empty()) {
+            resp.status_code = 500;
+            std::cerr << "[AirPlay] legacy pair-setup failed\n";
+            return resp;
+        }
+        resp.status_code = 200;
+        resp.headers["Content-Type"] = "application/octet-stream";
+        resp.body = std::move(response_data);
+        std::cout << "[AirPlay] Pair-setup (legacy): returned " << resp.body.size()
+                  << "-byte Ed25519 public key\n";
+        return resp;
+    }
+
+    // HAP TLV8 pair-setup (iPad with PIN)
     {
         auto ct = req.headers.find("Content-Type");
         if (ct == req.headers.end()) ct = req.headers.find("content-type");
@@ -539,8 +557,19 @@ network::RtspResponse AirPlayServer::handle_pair_setup(const network::RtspReques
             std::cerr << "[AirPlay] HAP pair-setup produced empty response\n";
             return resp;
         }
+        std::cout << "[HAP] pair-setup response: " << out.size() << "B, first 32: ";
+        for (size_t i = 0; i < 32 && i < out.size(); ++i)
+            std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)(uint8_t)out[i] << " ";
+        std::cout << std::dec << "\n";
         resp.status_code = 200;
-        resp.headers["Content-Type"] = "application/pairing+tlv8";
+        // Echo back the request's Content-Type (reference ap2-receiver does this).
+        // iPad sends application/x-apple-binary-plist; echoing it back is required.
+        {
+            auto ct = req.headers.find("Content-Type");
+            if (ct == req.headers.end()) ct = req.headers.find("content-type");
+            resp.headers["Content-Type"] = (ct != req.headers.end())
+                ? ct->second : "application/octet-stream";
+        }
         resp.body = std::move(out);
         if (hap_pair_setup_->is_complete()) {
             std::cout << "[AirPlay] HAP pair-setup complete — controller paired\n";
@@ -560,14 +589,65 @@ network::RtspResponse AirPlayServer::handle_pair_verify(const network::RtspReque
     network::RtspResponse resp;
     resp.status_code = 200;
 
-    // /pair-verify is HAP-only in this build. See handle_pair_setup() for
-    // rationale. Detection logging only.
+    // Detect legacy pair-verify (used by iPhones that did legacy pair-setup).
+    // Legacy format: body[0] = phase (1 or 0), body size = 68 for phase 1
+    // (4-byte header + 32B X25519 + 32B Ed25519) or variable for phase 2.
+    // HAP TLV8 pair-verify M1 is 37 bytes starting with type 0x00 or 0x06.
+    bool is_legacy = false;
+    if (req.body.size() >= 4) {
+        uint8_t phase = req.body[0];
+        // Legacy phase 1 is exactly 68 bytes: [01 00 00 00] + 32 + 32
+        if (phase == 1 && req.body.size() == 68) is_legacy = true;
+        // Legacy phase 2 starts with [00 00 00 00] and is NOT 37 bytes (HAP M1 is 37)
+        if (phase == 0 && req.body[1] == 0 && req.body[2] == 0 && req.body[3] == 0)
+            is_legacy = true;
+    }
+
+    if (is_legacy) {
+        uint8_t phase = req.body[0];
+        if (phase == 1) {
+            auto response_data = pairing_.pair_verify_phase1(req.body.data(),
+                                                             static_cast<int>(req.body.size()));
+            if (response_data.empty()) {
+                resp.status_code = 500;
+                std::cerr << "[AirPlay] legacy pair-verify phase 1 failed\n";
+                return resp;
+            }
+            resp.headers["Content-Type"] = "application/octet-stream";
+            resp.body = std::move(response_data);
+            std::cout << "[AirPlay] Pair-verify phase 1 (legacy): ECDH exchange ("
+                      << resp.body.size() << " bytes)\n";
+        } else {
+            if (!pairing_.pair_verify_phase2(req.body.data(),
+                                             static_cast<int>(req.body.size()))) {
+                resp.status_code = 500;
+                std::cerr << "[AirPlay] legacy pair-verify phase 2 failed\n";
+                return resp;
+            }
+            resp.headers["Content-Type"] = "application/octet-stream";
+            std::cout << "[AirPlay] Pair-verify phase 2 (legacy): verified OK\n";
+        }
+        return resp;
+    }
+
+    // HAP pair-verify (iPad with PIN — TLV8 format)
     {
         auto ct = req.headers.find("Content-Type");
         if (ct == req.headers.end()) ct = req.headers.find("content-type");
         std::cout << "[HAP] /pair-verify body=" << req.body.size() << "B"
                   << " ct=" << (ct == req.headers.end() ? std::string("(none)") : ct->second)
                   << "\n";
+    }
+
+    // If no controllers are paired yet, show the setup code early so the
+    // user can see it before iPad's code-entry UI appears. iPad always
+    // probes /pair-verify first; when it fails, iPad switches to /pair-setup
+    // and shows its PIN dialog — by then our PIN is already on screen.
+    if (on_pin_display_ && hap_pair_setup_ && !hap_pair_setup_->is_complete()) {
+        if (HapPairingStore::instance().list_ids().empty()) {
+            std::cout << "[HAP] setup code (early, pre-pair-setup): " << hap_setup_code_ << "\n";
+            on_pin_display_(hap_setup_code_);
+        }
     }
 
     if (hap_pair_verify_) {
@@ -578,7 +658,13 @@ network::RtspResponse AirPlayServer::handle_pair_verify(const network::RtspReque
             return resp;
         }
         resp.status_code = 200;
-        resp.headers["Content-Type"] = "application/pairing+tlv8";
+        // Echo back the request's Content-Type (matches reference ap2-receiver).
+        {
+            auto ct = req.headers.find("Content-Type");
+            if (ct == req.headers.end()) ct = req.headers.find("content-type");
+            resp.headers["Content-Type"] = (ct != req.headers.end())
+                ? ct->second : "application/octet-stream";
+        }
         resp.body = std::move(out);
         if (hap_pair_verify_->is_complete()) {
             std::cout << "[AirPlay] HAP pair-verify complete - session keys ready for M6 encrypted framing\n";
@@ -671,9 +757,12 @@ network::RtspResponse AirPlayServer::handle_pair_setup_pin(const network::RtspRe
             return resp;
         }
 
-        // SRP username "I" is the CLIENT-supplied "user" field (iPad's own
-        // device-id, e.g. its MAC). iOS computes x = H(s | H(I | ":" | PIN))
-        // using this same I, so the server MUST use the value the client sent.
+        // SRP username "I" — the client sends its own device-id as "user"
+        // in step 1. Note: SRP-6a /pair-setup-pin pairing has historically
+        // failed against MDM-managed iPads regardless of which username
+        // variant we try (Pair-Setup, the MAC, empty, lowercased, etc.) —
+        // see commit fe2e0f4. The real fix for MDM iPad is the HAP TLV8
+        // /pair-setup path, not this legacy SRP flow.
         const std::string& srp_username = user;
         if (!srp_pin_.start(current_pin_, srp_username)) {
             std::cerr << "[AirPlay] SRP start failed\n";
@@ -854,15 +943,25 @@ network::RtspResponse AirPlayServer::handle_setup(const network::RtspRequest& re
     std::vector<std::pair<int, int>> root_entries;
     const std::string source_ip = ip_from_addr(req.client_addr);
 
+    // Diagnostic: log ALL keys in the SETUP body
+    {
+        auto all_keys = reader.get_all_keys();
+        std::cout << "[AirPlay] SETUP body ALL keys (" << all_keys.size() << "): ";
+        for (const auto& k : all_keys) std::cout << k << " ";
+        std::cout << "(from " << source_ip << ")\n";
+        // Log timingProtocol value if present
+        std::string tp_val;
+        if (reader.get_string("timingProtocol", tp_val)) {
+            std::cout << "[AirPlay] SETUP timingProtocol=\"" << tp_val << "\"\n";
+        }
+    }
+
     // Phase 1: Encryption setup (eiv + ekey present)
     std::vector<uint8_t> eiv, ekey;
     if (reader.get_data("eiv", eiv) && reader.get_data("ekey", ekey)) {
         std::cout << "[AirPlay] SETUP from " << source_ip
                   << ": encryption init (eiv=" << eiv.size()
                   << "B, ekey=" << ekey.size() << "B)\n";
-
-        uint64_t timing_rport = 0;
-        reader.get_uint("timingPort", timing_rport);
 
         // Try to decrypt the AES stream key via FairPlay
         if (ekey.size() == 72) {
@@ -893,7 +992,10 @@ network::RtspResponse AirPlayServer::handle_setup(const network::RtspRequest& re
                 std::cout << "[AirPlay] NOTE: FairPlay decrypt failed\n";
             }
         }
+    }
 
+    // Always respond with timingPort/eventPort when timingPort or timingProtocol is present
+    if (reader.has_key("timingPort") || reader.has_key("timingProtocol")) {
         auto k1 = writer.add_string("eventPort");
         auto v1 = writer.add_uint(event_port_);
         root_entries.push_back({k1, v1});
@@ -901,6 +1003,8 @@ network::RtspResponse AirPlayServer::handle_setup(const network::RtspRequest& re
         auto k2 = writer.add_string("timingPort");
         auto v2 = writer.add_uint(timing_port_);
         root_entries.push_back({k2, v2});
+        std::cout << "[AirPlay] SETUP: eventPort=" << event_port_
+                  << " timingPort=" << timing_port_ << "\n";
     }
 
     // Phase 2: Stream setup (streams array present)
@@ -912,6 +1016,8 @@ network::RtspResponse AirPlayServer::handle_setup(const network::RtspRequest& re
             std::cout << "[AirPlay] SETUP stream type=" << s.type;
             if (s.stream_connection_id)
                 std::cout << " connID=" << s.stream_connection_id;
+            if (!s.shk.empty())
+                std::cout << " shk=" << s.shk.size() << "B";
             std::cout << "\n";
 
             if (s.type == 110) {
@@ -920,6 +1026,29 @@ network::RtspResponse AirPlayServer::handle_setup(const network::RtspRequest& re
                     std::lock_guard lock(sources_mutex_);
                     MirrorSource* src = get_or_create_source_locked(source_ip);
                     src->stream_connection_id = s.stream_connection_id;
+
+                    // If we have a shared key from the stream dict, use it
+                    if (!s.shk.empty() && s.shk.size() >= 16 && !src->has_aes_key) {
+                        memcpy(src->aes_key, s.shk.data(), 16);
+                        src->has_aes_key = true;
+                        src->buffer->set_aes_key(src->aes_key);
+                        std::cout << "[AirPlay] Using shk from stream dict as AES key\n";
+                    }
+
+                    // If we still don't have a key, derive from pair-verify shared secret
+                    if (!src->has_aes_key) {
+                        uint8_t ecdh_secret[32];
+                        if (pairing_.get_ecdh_secret(ecdh_secret)) {
+                            // Use first 16 bytes of pair-verify shared secret as base AES key
+                            memcpy(src->aes_key, ecdh_secret, 16);
+                            src->has_aes_key = true;
+                            src->buffer->set_aes_key(src->aes_key);
+                            std::cout << "[AirPlay] Mirror: derived AES key from pair-verify shared secret\n";
+                        } else {
+                            std::cout << "[AirPlay] Mirror: WARNING — no AES key available\n";
+                        }
+                    }
+
                     if (src->has_aes_key) {
                         src->buffer->init_aes(s.stream_connection_id);
                     }
@@ -1310,6 +1439,10 @@ void AirPlayServer::mirror_receive_loop() {
                         it->second->buffer->decrypt(payload.data(), decrypted.data(),
                                                     static_cast<int>(payload_size));
                     } else {
+                        if (frame_count == 0) {
+                            std::cerr << "[AirPlay] Mirror: WARNING — no FairPlay AES key, "
+                                      << "passing raw (encrypted) data to decoder\n";
+                        }
                         decrypted = std::move(payload);
                     }
                     dec = it->second->video_decoder.get();

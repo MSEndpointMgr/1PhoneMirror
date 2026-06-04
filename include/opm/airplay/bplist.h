@@ -21,8 +21,12 @@ public:
     struct StreamInfo {
         uint64_t type = 0;
         uint64_t stream_connection_id = 0;
+        std::vector<uint8_t> shk; // shared key (if present)
     };
     bool get_streams(std::vector<StreamInfo>& out) const;
+
+    // Return all top-level key names (for diagnostics)
+    std::vector<std::string> get_all_keys() const;
 
 private:
     const uint8_t* data_ = nullptr;

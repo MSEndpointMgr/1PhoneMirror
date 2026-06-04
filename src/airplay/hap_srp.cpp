@@ -77,6 +77,18 @@ std::vector<uint8_t> sha512_concat(std::initializer_list<std::pair<const uint8_t
     return out;
 }
 
+// Hex dump for SRP capture harness — output is meant to be diffed against
+// the reference Python implementation in scripts/srp_check.py.
+void dump_hex(const char* label, const uint8_t* data, size_t n) {
+    std::cerr << "[HAP-SRP-DUMP] " << label << "(" << n << ")=";
+    std::cerr << std::hex << std::setfill('0');
+    for (size_t i = 0; i < n; ++i) std::cerr << std::setw(2) << (int)data[i];
+    std::cerr << std::dec << "\n";
+}
+void dump_hex(const char* label, const std::vector<uint8_t>& v) {
+    dump_hex(label, v.data(), v.size());
+}
+
 // k = H(N | PAD(g))  — SRP-6a standard, padded g to N's length.
 std::vector<uint8_t> compute_k(const BIGNUM* N, const BIGNUM* g) {
     auto Nb = bn_to_padded(N);
@@ -208,6 +220,15 @@ bool HapSrpServer::start(const std::string& setup_code,
     out_salt = impl_->salt;
     out_B = bn_to_padded(impl_->B.get());
     impl_->started = true;
+
+    // ---- capture harness dump ----
+    std::cerr << "[HAP-SRP-DUMP] === pair-setup M2 (server side) ===\n";
+    std::cerr << "[HAP-SRP-DUMP] I=\"" << impl_->I << "\"\n";
+    std::cerr << "[HAP-SRP-DUMP] setup_code=\"" << setup_code << "\"\n";
+    dump_hex("salt", out_salt);
+    dump_hex("B", out_B);
+    auto v_bytes = bn_to_padded(impl_->v.get());
+    dump_hex("v", v_bytes);
     return true;
 }
 
@@ -255,6 +276,15 @@ std::vector<uint8_t> HapSrpServer::verify_client_proof(
 
     auto M1_server = compute_M1(impl_->N.get(), impl_->g.get(), impl_->I,
                                  impl_->salt, A.get(), impl_->B.get(), K_);
+
+    // ---- capture harness dump ----
+    std::cerr << "[HAP-SRP-DUMP] === pair-setup M3 (server side) ===\n";
+    dump_hex("A", A_bytes);
+    dump_hex("S", Sb);
+    dump_hex("K", K_);
+    dump_hex("M1_server", M1_server);
+    dump_hex("M1_client", M1_client);
+
     if (M1_server.size() != M1_client.size() ||
         CRYPTO_memcmp(M1_server.data(), M1_client.data(), M1_server.size()) != 0) {
         std::cerr << "[HAP-SRP] M1 mismatch! server_M1[0..7]=";

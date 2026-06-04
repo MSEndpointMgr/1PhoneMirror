@@ -222,12 +222,23 @@ bool BPlistReader::get_streams(std::vector<StreamInfo>& out) const {
                     info.type = read_uint_object(d.val_refs[j]);
                 else if (k == "streamConnectionID")
                     info.stream_connection_id = read_uint_object(d.val_refs[j]);
+                else if (k == "shk")
+                    info.shk = read_data_object(d.val_refs[j]);
             }
             out.push_back(info);
         }
         return !out.empty();
     }
     return false;
+}
+
+std::vector<std::string> BPlistReader::get_all_keys() const {
+    std::vector<std::string> keys;
+    auto root = read_dict(root_object_);
+    for (size_t i = 0; i < root.key_refs.size(); i++) {
+        keys.push_back(read_string_object(root.key_refs[i]));
+    }
+    return keys;
 }
 
 // ===== BPlistWriter =====

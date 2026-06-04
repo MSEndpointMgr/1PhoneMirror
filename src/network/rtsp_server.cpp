@@ -55,6 +55,7 @@ void RtspServer::handle_client(socket_t client, const std::string& addr) {
 
         std::cout << "[RTSP] " << req.method << " " << req.uri
                   << " CSeq=" << req.cseq
+                  << " ver=" << req.version
                   << (ctx.hap ? " [enc]" : "") << "\n";
 
         RtspResponse resp;
@@ -167,6 +168,11 @@ RtspRequest RtspServer::parse_request(ClientCtx& ctx) {
 void RtspServer::send_response(ClientCtx& ctx, const RtspRequest& req,
                                 const RtspResponse& resp) {
     std::ostringstream oss;
+    // Always respond with RTSP/1.0 regardless of what the client sent.
+    // The reference ap2-receiver does this: parse_request() replaces RTSP
+    // with HTTP for Python's parser, then forces protocol_version="RTSP/1.0"
+    // for ALL responses. Modern iPadOS sends HTTP/1.1 for pair-setup but
+    // expects RTSP/1.0 back (AirPlay is RTSP-based).
     oss << "RTSP/1.0 " << resp.status_code << " " << resp.reason << "\r\n";
     oss << "CSeq: " << req.cseq << "\r\n";
     oss << "Server: AirTunes/220.68\r\n";
@@ -181,7 +187,17 @@ void RtspServer::send_response(ClientCtx& ctx, const RtspRequest& req,
 
     oss << "\r\n";
 
-    send_string_ctx(ctx, oss.str());
+    std::string hdr_str = oss.str();
+
+    // Diagnostic: log full response for pair-setup
+    if (req.uri.find("/pair-setup") != std::string::npos ||
+        req.uri.find("/pair-verify") != std::string::npos) {
+        std::cerr << "[RTSP] >>> response to " << req.uri << " (" << hdr_str.size()
+                  << "B hdr + " << resp.body.size() << "B body):\n"
+                  << hdr_str;
+    }
+
+    send_string_ctx(ctx, hdr_str);
 
     if (!resp.body.empty()) {
         send_bytes_ctx(ctx, resp.body.data(), resp.body.size());

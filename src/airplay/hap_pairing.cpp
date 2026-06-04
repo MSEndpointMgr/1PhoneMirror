@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 
@@ -299,10 +300,16 @@ std::vector<uint8_t> HapPairSetup::handle(const std::vector<uint8_t>& in_tlv,
         impl_->session_K = impl_->srp.session_key();
         impl_->state = Impl::S::AwaitingM5;
         std::cout << "[HAP] pair-setup M3 → M4 (proof verified, K derived)\n";
+
         TlvWriter w;
         w.add_u8(TlvType::State, 0x04);
         w.add(TlvType::Proof, M2);
-        return w.take();
+        auto resp = w.take();
+        std::cout << "[HAP] pair-setup M4 response: " << resp.size() << "B, M2[0..7]=";
+        for (int i = 0; i < 8 && i < (int)M2.size(); ++i)
+            std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)M2[i];
+        std::cout << std::dec << "\n";
+        return resp;
     }
 
     // ---- M5 ----------------------------------------------------------------

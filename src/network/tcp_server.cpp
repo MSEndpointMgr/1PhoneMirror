@@ -1,4 +1,5 @@
 #include <opm/network/tcp_server.h>
+#include <iomanip>
 #include <iostream>
 
 #ifdef _WIN32
@@ -174,6 +175,12 @@ void TcpServer::accept_loop() {
         inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, sizeof(ip_str));
         std::string addr = std::string(ip_str) + ":" + std::to_string(ntohs(client_addr.sin_port));
 
+        // Disable Nagle to send small responses (like pair-setup M4)
+        // immediately without buffering.
+        int nodelay = 1;
+        setsockopt(client, IPPROTO_TCP, TCP_NODELAY,
+                   reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
+
         std::cout << "[TCP] Client connected: " << addr << "\n";
 
         if (!on_connect_) {
@@ -210,16 +217,41 @@ int TcpServer::recv_exact(socket_t sock, uint8_t* buf, int len) {
 std::string TcpServer::recv_line(socket_t sock) {
     std::string line;
     char ch;
-    while (recv(sock, &ch, 1, 0) == 1) {
-        if (ch == '\n') {
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
+    while (true) {
+        int r = recv(sock, &ch, 1, 0);
+        if (r == 1) {
+            if (ch == '\n') {
+                if (!line.empty() && line.back() == '\r') {
+                    line.pop_back();
+                }
+                return line;
+            }
+            line += ch;
+        } else {
+            // r == 0 (peer closed) or r < 0 (error)
+            if (line.empty()) {
+#ifdef _WIN32
+                int err = WSAGetLastError();
+                std::cerr << "[TCP] recv_line: recv returned " << r
+                          << " (WSA=" << err << ") — peer "
+                          << (r == 0 ? "closed" : "error") << "\n";
+#else
+                std::cerr << "[TCP] recv_line: recv returned " << r
+                          << " (errno=" << errno << ") — peer "
+                          << (r == 0 ? "closed" : "error") << "\n";
+#endif
+            } else {
+                std::cerr << "[TCP] recv_line: recv ended mid-line ("
+                          << line.size() << " bytes so far, first="
+                          << std::hex;
+                for (size_t i = 0; i < std::min<size_t>(line.size(), 16); ++i)
+                    std::cerr << std::setw(2) << std::setfill('0')
+                              << (int)(unsigned char)line[i] << " ";
+                std::cerr << std::dec << ")\n";
             }
             return line;
         }
-        line += ch;
     }
-    return line;
 }
 
 bool TcpServer::send_all(socket_t sock, const uint8_t* data, int len) {
