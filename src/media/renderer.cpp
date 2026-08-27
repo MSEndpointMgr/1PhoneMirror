@@ -2,6 +2,7 @@
 #include <opm/log_buffer.h>
 #include <opm/config.h>
 #include <opm/network/update_check.h>
+#include <opm/usage_log.h>
 #ifdef _WIN32
 #include <opm/media/ocr.h>
 #endif
@@ -11,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -34,6 +36,42 @@ extern "C" {
     unsigned char* stbi_load(const char* filename, int* x, int* y,
                              int* channels_in_file, int desired_channels);
     void stbi_image_free(void* retval_from_stbi_load);
+}
+
+// Bilinear downscale/upscale of an RGBA8 buffer. `src_stride` is in bytes
+// (may include row padding); the output is always tightly packed (dw*4).
+static std::vector<uint8_t> resize_rgba_bilinear(const uint8_t* src, int sw, int sh,
+                                                  int src_stride, int dw, int dh) {
+    std::vector<uint8_t> dst((size_t)dw * dh * 4, 0);
+    if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return dst;
+    const float x_ratio = (float)sw / (float)dw;
+    const float y_ratio = (float)sh / (float)dh;
+    for (int y = 0; y < dh; ++y) {
+        float sy = (y + 0.5f) * y_ratio - 0.5f;
+        int y0 = (int)std::floor(sy);
+        float fy = sy - (float)y0;
+        int y0c = std::clamp(y0, 0, sh - 1);
+        int y1c = std::clamp(y0 + 1, 0, sh - 1);
+        for (int x = 0; x < dw; ++x) {
+            float sx = (x + 0.5f) * x_ratio - 0.5f;
+            int x0 = (int)std::floor(sx);
+            float fx = sx - (float)x0;
+            int x0c = std::clamp(x0, 0, sw - 1);
+            int x1c = std::clamp(x0 + 1, 0, sw - 1);
+            const uint8_t* p00 = src + (size_t)y0c * src_stride + (size_t)x0c * 4;
+            const uint8_t* p10 = src + (size_t)y0c * src_stride + (size_t)x1c * 4;
+            const uint8_t* p01 = src + (size_t)y1c * src_stride + (size_t)x0c * 4;
+            const uint8_t* p11 = src + (size_t)y1c * src_stride + (size_t)x1c * 4;
+            uint8_t* d = dst.data() + (size_t)y * dw * 4 + (size_t)x * 4;
+            for (int c = 0; c < 4; ++c) {
+                float v0 = p00[c] + (p10[c] - p00[c]) * fx;
+                float v1 = p01[c] + (p11[c] - p01[c]) * fx;
+                float v  = v0 + (v1 - v0) * fy;
+                d[c] = (uint8_t)std::clamp(v, 0.0f, 255.0f);
+            }
+        }
+    }
+    return dst;
 }
 
 #ifdef _WIN32
@@ -425,6 +463,53 @@ static void png_write_vec(void* context, void* data, int size) {
     auto* vec = static_cast<std::vector<uint8_t>*>(context);
     auto* bytes = static_cast<const uint8_t*>(data);
     vec->insert(vec->end(), bytes, bytes + size);
+}
+
+// Standard (zlib/PNG) CRC-32, needed to hand-build the pHYs chunk below.
+static uint32_t png_crc32(const uint8_t* data, size_t len) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < len; ++i) {
+        crc ^= data[i];
+        for (int k = 0; k < 8; ++k)
+            crc = (crc & 1) ? (crc >> 1) ^ 0xEDB88320u : (crc >> 1);
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
+
+// Inserts a pHYs chunk (pixels-per-meter, both axes) right after IHDR so
+// Office reads the image's true DPI instead of assuming 96 — lets resized
+// screenshots carry far more pixels per cm without growing on the page.
+static void png_set_dpi(std::vector<uint8_t>& png, int dpi) {
+    if (png.size() < 33 || dpi <= 0) return;
+    uint32_t ppm = (uint32_t)std::lround(dpi / 0.0254);
+    std::vector<uint8_t> chunk;
+    auto push_u32 = [&](uint32_t v) {
+        chunk.push_back((uint8_t)(v >> 24)); chunk.push_back((uint8_t)(v >> 16));
+        chunk.push_back((uint8_t)(v >> 8));  chunk.push_back((uint8_t)v);
+    };
+    push_u32(9); // chunk data length
+    size_t type_data_start = chunk.size();
+    const char type[4] = {'p', 'H', 'Y', 's'};
+    chunk.insert(chunk.end(), type, type + 4);
+    push_u32(ppm); // x pixels per unit
+    push_u32(ppm); // y pixels per unit
+    chunk.push_back(1); // unit specifier: 1 = meter
+    uint32_t crc = png_crc32(chunk.data() + type_data_start, chunk.size() - type_data_start);
+    push_u32(crc);
+    png.insert(png.begin() + 33, chunk.begin(), chunk.end());
+}
+
+// Encodes to PNG in memory (so a pHYs/DPI chunk can be injected) then
+// writes the result to disk. dpi <= 0 leaves the file without DPI metadata.
+static bool write_png_file_dpi(const std::string& path, int w, int h,
+                               const uint8_t* rgba, int stride, int dpi) {
+    std::vector<uint8_t> data;
+    if (!stbi_write_png_to_func(png_write_vec, &data, w, h, 4, rgba, stride)) return false;
+    png_set_dpi(data, dpi);
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f.is_open()) return false;
+    f.write(reinterpret_cast<const char*>(data.data()), (std::streamsize)data.size());
+    return f.good();
 }
 
 static bool in_rect(int px, int py, int rx, int ry, int rw, int rh) {
@@ -855,6 +940,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
+        version_lines_.push_back(make_ver(L"27.08.2026 \u2013 0.5.2", 34, 200, 200, 255));
+        version_lines_.push_back(make_desc(L"Usage Statistics panel + screenshot resize-to-cm"));
+        version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"01.06.2026 \u2013 0.5.1", 34, 200, 200, 255));
         version_lines_.push_back(make_desc(L"Bezel side buttons: action button, better sizing & visibility"));
         version_lines_.push_back({nullptr, 0, 0});
@@ -1167,9 +1255,11 @@ void Renderer::run() {
                     }
                 }
                 if (event.key.keysym.sym == SDLK_l) {
-                    log_panel_visible_ = !log_panel_visible_;
-                    log_panel_animating_ = true;
-                    log_panel_anim_start_ = std::chrono::steady_clock::now();
+                    toggle_drawer(DrawerMode::Log);
+                }
+                if (event.key.keysym.sym == SDLK_t &&
+                    !(event.key.keysym.mod & (KMOD_CTRL | KMOD_SHIFT))) {
+                    toggle_drawer(DrawerMode::Stats);
                 }
                 if (event.key.keysym.sym == SDLK_w) {
                     toggle_webcam_drawer();
@@ -1801,9 +1891,27 @@ void Renderer::run() {
                     if (log_btn_.w > 0 &&
                         in_rect(mx, my, log_btn_.x, log_btn_.y,
                                 log_btn_.w, log_btn_.h)) {
-                        log_panel_visible_ = !log_panel_visible_;
-                        log_panel_animating_ = true;
-                        log_panel_anim_start_ = std::chrono::steady_clock::now();
+                        toggle_drawer(DrawerMode::Log);
+                        break;
+                    }
+
+                    // Statistics star toggle (same drawer, Stats content)
+                    if (stats_btn_.w > 0 &&
+                        in_rect(mx, my, stats_btn_.x, stats_btn_.y,
+                                stats_btn_.w, stats_btn_.h)) {
+                        toggle_drawer(DrawerMode::Stats);
+                        break;
+                    }
+
+                    // "Open usage_log.csv" button inside the Statistics drawer.
+                    if (log_panel_visible_ && drawer_mode_ == DrawerMode::Stats &&
+                        stats_open_csv_btn_.w > 0 &&
+                        in_rect(mx, my, stats_open_csv_btn_.x, stats_open_csv_btn_.y,
+                                stats_open_csv_btn_.w, stats_open_csv_btn_.h)) {
+#ifdef _WIN32
+                        ShellExecuteA(nullptr, "open", opm::UsageLog::file_path().c_str(),
+                                     nullptr, nullptr, SW_SHOWNORMAL);
+#endif
                         break;
                     }
 
@@ -2057,6 +2165,30 @@ void Renderer::run() {
                                 in_rect(mx, my, settings_fmt_gif_btn_.x, settings_fmt_gif_btn_.y,
                                         settings_fmt_gif_btn_.w, settings_fmt_gif_btn_.h)) {
                                 settings_.record_format = 1;
+                                settings_.save();
+                            }
+                            if (in_rect(mx, my, settings_toggle_resize_btn_.x, settings_toggle_resize_btn_.y,
+                                        settings_toggle_resize_btn_.w, settings_toggle_resize_btn_.h)) {
+                                settings_.screenshot_resize_enabled = !settings_.screenshot_resize_enabled;
+                                settings_.save();
+                            }
+                            if (settings_resize_minus_btn_.w > 0 &&
+                                in_rect(mx, my, settings_resize_minus_btn_.x, settings_resize_minus_btn_.y,
+                                        settings_resize_minus_btn_.w, settings_resize_minus_btn_.h)) {
+                                settings_.screenshot_resize_height_cm =
+                                    std::clamp(settings_.screenshot_resize_height_cm - 0.5f, 1.0f, 30.0f);
+                                settings_.save();
+                            }
+                            if (settings_resize_plus_btn_.w > 0 &&
+                                in_rect(mx, my, settings_resize_plus_btn_.x, settings_resize_plus_btn_.y,
+                                        settings_resize_plus_btn_.w, settings_resize_plus_btn_.h)) {
+                                settings_.screenshot_resize_height_cm =
+                                    std::clamp(settings_.screenshot_resize_height_cm + 0.5f, 1.0f, 30.0f);
+                                settings_.save();
+                            }
+                            if (in_rect(mx, my, settings_toggle_save_original_btn_.x, settings_toggle_save_original_btn_.y,
+                                        settings_toggle_save_original_btn_.w, settings_toggle_save_original_btn_.h)) {
+                                settings_.screenshot_save_original_too = !settings_.screenshot_save_original_too;
                                 settings_.save();
                             }
                             break;
@@ -3260,57 +3392,71 @@ void Renderer::render_frame() {
     // first-run state). Draws below the toast pill when both are visible.
     draw_update_banner();
 
-    // Log star — center right bezel
+    // Log / Statistics toggle bars — center right bezel. Both buttons
+    // share the same bar/chevron glyph; the pair is vertically centered
+    // as a group (not each bar individually) with a gap between them.
     {
         float scale = (float)frame_dst_w_ / phone_frame_.frame_width();
         int bezel_right = frame_dst_w_ - (int)((phone_frame_.screen_x() + phone_frame_.screen_width()) * scale);
         // Glyph size derived from the phone-equivalent reference width so
-        // the log chevron stays compact on tablet/desktop sources.
+        // the chevrons stay compact on tablet/desktop sources.
         int dot_r = std::max(2, ui_ref_width() / 175);
         int star_cx = frame_dst_x_ + frame_dst_w_ - bezel_right / 2;
-        int star_cy = frame_dst_y_ + frame_dst_h_ / 2;
         int hit_sz = std::max(16, dot_r * 6);
-        log_btn_ = {star_cx - hit_sz / 2, star_cy - hit_sz / 2, hit_sz, hit_sz};
+        int group_gap = hit_sz; // "some vertical space" between the two lines
+        int center_y = frame_dst_y_ + frame_dst_h_ / 2;
+        int log_cy   = center_y - (hit_sz + group_gap) / 2;
+        int stats_cy = center_y + (hit_sz + group_gap) / 2;
 
         int smx, smy;
         SDL_GetMouseState(&smx, &smy);
-        bool log_hover = in_rect(smx, smy, log_btn_.x, log_btn_.y, log_btn_.w, log_btn_.h);
-        uint8_t la = (log_hover || log_panel_visible_) ? 240 : 160;
-        SDL_SetRenderDrawColor(sdl_renderer_, 220, 220, 220, la);
 
-        // Toggle indicator — closed "|" and open ">" share the same
-        // vertical span. Chevron uses a thinner stroke so it does not
-        // read as bold next to the slim collapsed bar.
-        int g_sz   = std::max(8, dot_r * 6);
-        int g_half = g_sz / 2;
-        int t_bar  = std::max(1, dot_r);
-        int t_chev = std::max(1, dot_r - 1);
-        auto fill_rect_centered = [&](int cx, int cy, int w, int h) {
-            SDL_Rect r{cx - w / 2, cy - h / 2, w, h};
-            SDL_RenderFillRect(sdl_renderer_, &r);
+        auto draw_bar_button = [&](int star_cy, bool is_open, const char* key,
+                                   const char* tooltip, BtnRect& out_rect) {
+            out_rect = {star_cx - hit_sz / 2, star_cy - hit_sz / 2, hit_sz, hit_sz};
+            bool hover = in_rect(smx, smy, out_rect.x, out_rect.y, out_rect.w, out_rect.h);
+            uint8_t la = (hover || is_open) ? 240 : 160;
+            SDL_SetRenderDrawColor(sdl_renderer_, 220, 220, 220, la);
+
+            // Toggle indicator — closed "|" and open ">" share the same
+            // vertical span. Chevron uses a thinner stroke so it does not
+            // read as bold next to the slim collapsed bar.
+            int g_sz   = std::max(8, dot_r * 6);
+            int g_half = g_sz / 2;
+            int t_bar  = std::max(1, dot_r);
+            int t_chev = std::max(1, dot_r - 1);
+            auto fill_rect_centered = [&](int cx, int cy, int w, int h) {
+                SDL_Rect r{cx - w / 2, cy - h / 2, w, h};
+                SDL_RenderFillRect(sdl_renderer_, &r);
+            };
+            auto draw_thick_seg = [&](int x1, int y1, int x2, int y2, int t) {
+                int half = t / 2;
+                for (int dx = -half; dx <= half; ++dx)
+                    for (int dy = -half; dy <= half; ++dy)
+                        SDL_RenderDrawLine(sdl_renderer_, x1 + dx, y1 + dy,
+                                                           x2 + dx, y2 + dy);
+            };
+            if (is_open) {
+                int h_reach = g_half / 2;
+                draw_thick_seg(star_cx - h_reach / 2, star_cy - g_half,
+                               star_cx + h_reach,    star_cy, t_chev);
+                draw_thick_seg(star_cx - h_reach / 2, star_cy + g_half,
+                               star_cx + h_reach,    star_cy, t_chev);
+            } else {
+                fill_rect_centered(star_cx, star_cy, t_bar, g_sz);
+            }
+            if (hover) {
+                bezel_hover_key = key;
+                bezel_hover_text = tooltip;
+                bezel_hover_ax = star_cx - dot_r * 6;
+                bezel_hover_ay = star_cy;
+            }
         };
-        auto draw_thick_seg = [&](int x1, int y1, int x2, int y2, int t) {
-            int half = t / 2;
-            for (int dx = -half; dx <= half; ++dx)
-                for (int dy = -half; dy <= half; ++dy)
-                    SDL_RenderDrawLine(sdl_renderer_, x1 + dx, y1 + dy,
-                                                       x2 + dx, y2 + dy);
-        };
-        if (log_panel_anim_ > 0.5f) {
-            int h_reach = g_half / 2;
-            draw_thick_seg(star_cx - h_reach / 2, star_cy - g_half,
-                           star_cx + h_reach,    star_cy, t_chev);
-            draw_thick_seg(star_cx - h_reach / 2, star_cy + g_half,
-                           star_cx + h_reach,    star_cy, t_chev);
-        } else {
-            fill_rect_centered(star_cx, star_cy, t_bar, g_sz);
-        }
-        if (log_hover) {
-            bezel_hover_key = "log";
-            bezel_hover_text = "Show log (L)";
-            bezel_hover_ax = star_cx - dot_r * 6;
-            bezel_hover_ay = star_cy;
-        }
+
+        bool log_open   = log_panel_visible_ && drawer_mode_ == DrawerMode::Log   && log_panel_anim_ > 0.5f;
+        bool stats_open = log_panel_visible_ && drawer_mode_ == DrawerMode::Stats && log_panel_anim_ > 0.5f;
+        draw_bar_button(log_cy,   log_open,   "log",   "Show log (L)", log_btn_);
+        draw_bar_button(stats_cy, stats_open, "stats", "Show statistics (T)", stats_btn_);
     }
 
     // Source picker — small dots in bottom bezel, one per connected device.
@@ -3523,6 +3669,7 @@ void Renderer::render_frame() {
         // re-entering restarts the 1 s delay.
         if (hover_key_.rfind("menu", 0) == 0 ||
             hover_key_.rfind("log", 0) == 0 ||
+            hover_key_.rfind("stats", 0) == 0 ||
             hover_key_.rfind("src:", 0) == 0 ||
             hover_key_.rfind("resize", 0) == 0 ||
             hover_key_.rfind("webcam", 0) == 0 ||
@@ -5278,6 +5425,9 @@ void Renderer::draw_settings_panel() {
                 + label_h + row_gap                       // toggle 8 (webcam mirror)
                 + label_h + row_gap                       // toggle 9 (webcam in recording)
                 + label_h + row_gap                       // recording format row
+                + label_h + row_gap                       // toggle 10 (resize to height)
+                + label_h + row_gap                       // resize stepper row
+                + label_h + row_gap                       // toggle 11 (save original too)
                 + pad;
 
     // Slide animation
@@ -5354,9 +5504,9 @@ void Renderer::draw_settings_panel() {
     cy += swatch_rows * (swatch + row_gap) + row_gap;
 
     // Toggle helper
-    auto draw_toggle = [&](const std::string& label, bool on, int row_y) -> BtnRect {
+    auto draw_toggle = [&](const std::string& label, bool on, int row_y, int indent = 0) -> BtnRect {
         int box = std::max(12, label_h + 2);
-        int row_x = panel_x + pad;
+        int row_x = panel_x + pad + indent;
         // Checkbox box
         SDL_SetRenderDrawColor(sdl_renderer_, 50, 50, 55, alpha);
         SDL_Rect br = {row_x, row_y, box, box};
@@ -5383,7 +5533,7 @@ void Renderer::draw_settings_panel() {
                    row_y + (box - label_h) / 2 - 1,
                    220, 220, 225, false);
         // Hit rect spans the full row (box + label) for easier clicking.
-        return BtnRect{row_x, row_y, panel_w - pad * 2, box};
+        return BtnRect{row_x, row_y, panel_w - pad * 2 - indent, box};
     };
 
     settings_toggle_save_btn_ = draw_toggle(
@@ -5417,7 +5567,7 @@ void Renderer::draw_settings_panel() {
         int sub_box  = std::max(12, label_h + 2);
         int sub_x    = panel_x + pad + sub_box + std::max(6, sub_box / 3);
         const char* sub_lines[] = {
-            "Random install ID, app version, Windows build.",
+            "Random install ID, app version, anonymous usage counts.",
             "No IP, no name, no content.",
             "Inspires me to prioritize fixes and platforms."
         };
@@ -5492,6 +5642,61 @@ void Renderer::draw_settings_panel() {
         }
     }
     cy += label_h + row_gap * 2;
+
+    settings_toggle_resize_btn_ = draw_toggle(
+        "Resize screenshots to height (cm)",
+        settings_.screenshot_resize_enabled, cy);
+    cy += label_h + row_gap;
+
+    // Sub-settings of the toggle above, indented to read as children.
+    int sub_indent = std::max(14, label_h);
+
+    // Height stepper: "-" / "X.X cm" / "+", steps of 0.5cm, [1.0, 30.0].
+    {
+        int row_x = panel_x + pad + sub_indent;
+        int box   = std::max(12, label_h + 2);
+        auto draw_step_pill = [&](const std::string& label, int px, int py, int pw, int ph) -> BtnRect {
+            SDL_SetRenderDrawColor(sdl_renderer_, 50, 50, 55, alpha);
+            SDL_Rect br = {px, py, pw, ph};
+            SDL_RenderFillRect(sdl_renderer_, &br);
+            SDL_SetRenderDrawColor(sdl_renderer_, 100, 100, 110, text_alpha);
+            SDL_RenderDrawRect(sdl_renderer_, &br);
+            int tw = 0, th = 0;
+            SDL_Texture* tt = make_text_texture(sdl_renderer_, label, label_h, 220, 220, 225, &tw, &th);
+            if (tt) {
+                SDL_SetTextureAlphaMod(tt, text_alpha);
+                SDL_Rect td{px + (pw - tw) / 2, py + (ph - th) / 2, tw, th};
+                SDL_RenderCopy(sdl_renderer_, tt, nullptr, &td);
+                SDL_DestroyTexture(tt);
+            }
+            return BtnRect{px, py, pw, ph};
+        };
+        int step_h = box;
+        int minus_x = row_x;
+        settings_resize_minus_btn_ = draw_step_pill("-", minus_x, cy, step_h, step_h);
+        char cmbuf[16];
+        float cmv = settings_.screenshot_resize_height_cm;
+        if (std::abs(cmv - std::round(cmv)) < 0.01f) snprintf(cmbuf, sizeof(cmbuf), "%d cm", (int)std::lround(cmv));
+        else snprintf(cmbuf, sizeof(cmbuf), "%.1f cm", cmv);
+        int val_w = std::max(48, label_h * 3);
+        int val_x = minus_x + step_h + std::max(4, box / 3);
+        int vtw = 0, vth = 0;
+        SDL_Texture* vtex = make_text_texture(sdl_renderer_, cmbuf, label_h, 230, 230, 235, &vtw, &vth);
+        if (vtex) {
+            SDL_SetTextureAlphaMod(vtex, text_alpha);
+            SDL_Rect vd{val_x + (val_w - vtw) / 2, cy + (step_h - vth) / 2, vtw, vth};
+            SDL_RenderCopy(sdl_renderer_, vtex, nullptr, &vd);
+            SDL_DestroyTexture(vtex);
+        }
+        int plus_x = val_x + val_w + std::max(4, box / 3);
+        settings_resize_plus_btn_ = draw_step_pill("+", plus_x, cy, step_h, step_h);
+    }
+    cy += label_h + row_gap;
+
+    settings_toggle_save_original_btn_ = draw_toggle(
+        "Also save original full-size image",
+        settings_.screenshot_save_original_too, cy, sub_indent);
+    cy += label_h + row_gap;
 }
 
 void Renderer::clear_log_row_cache() {
@@ -5499,6 +5704,19 @@ void Renderer::clear_log_row_cache() {
         if (r.tex) SDL_DestroyTexture(r.tex);
     }
     log_row_cache_.clear();
+}
+
+void Renderer::toggle_drawer(DrawerMode mode) {
+    if (log_panel_visible_ && drawer_mode_ == mode) {
+        log_panel_visible_ = false;
+    } else {
+        if (log_panel_visible_ && drawer_mode_ != mode) log_scroll_offset_ = 0;
+        if (mode == DrawerMode::Stats) stats_cache_dirty_ = true;
+        drawer_mode_ = mode;
+        log_panel_visible_ = true;
+    }
+    log_panel_animating_ = true;
+    log_panel_anim_start_ = std::chrono::steady_clock::now();
 }
 
 void Renderer::draw_log_panel() {
@@ -5629,6 +5847,11 @@ void Renderer::draw_log_panel() {
 
     SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
 
+    if (drawer_mode_ == DrawerMode::Stats) {
+        draw_stats_drawer_content(panel_x, panel_y, panel_w, panel_h, pr, lp_margin);
+        return;
+    }
+
     // Get log lines
     auto lines = opm::LogBuffer::instance().get_lines();
     if (lines.empty()) return;
@@ -5757,6 +5980,171 @@ void Renderer::draw_log_panel() {
         int thumb_y = track_y + (int)((track_h - thumb_h) * scroll_frac);
 
         // Store geometry for drag handling
+        log_sb_track_y_ = track_y;
+        log_sb_track_h_ = track_h;
+        log_sb_thumb_h_ = thumb_h;
+        log_sb_max_scroll_ = max_scroll;
+
+        uint8_t sb_alpha = log_scrollbar_dragging_ ? 220 : 150;
+        SDL_SetRenderDrawColor(sdl_renderer_, 80, 80, 90, sb_alpha);
+        SDL_Rect thumb_rect = {sb_x, thumb_y, sb_w, thumb_h};
+        SDL_RenderFillRect(sdl_renderer_, &thumb_rect);
+    } else {
+        log_sb_track_h_ = 0;
+        log_sb_max_scroll_ = 0;
+    }
+#endif
+}
+
+void Renderer::rebuild_stats_cache(int font_sz) {
+    for (auto& r : stats_kpi_cache_) if (r.tex) SDL_DestroyTexture(r.tex);
+    stats_kpi_cache_.clear();
+    for (auto& r : stats_row_cache_) if (r.tex) SDL_DestroyTexture(r.tex);
+    stats_row_cache_.clear();
+
+    auto rows = opm::UsageLog::load_rows();
+    auto stats = opm::UsageLog::compute_stats(rows);
+
+    auto push_kpi = [&](const std::string& s) {
+        LogRowCache row;
+        row.text = s; row.r = 210; row.g = 210; row.b = 215;
+        row.tex = make_text_texture(sdl_renderer_, s, font_sz, row.r, row.g, row.b, &row.w, &row.h);
+        stats_kpi_cache_.push_back(std::move(row));
+    };
+    char buf[128];
+    snprintf(buf, sizeof(buf), "App starts: %d", stats.app_starts);
+    push_kpi(buf);
+    snprintf(buf, sizeof(buf), "iOS sessions: %d (%.0f min)", stats.ios_sessions, stats.ios_minutes);
+    push_kpi(buf);
+    snprintf(buf, sizeof(buf), "Android sessions: %d (%.0f min)", stats.android_sessions, stats.android_minutes);
+    push_kpi(buf);
+    snprintf(buf, sizeof(buf), "Screenshots: iOS %d / Android %d",
+             stats.screenshots.ios, stats.screenshots.android);
+    push_kpi(buf);
+    snprintf(buf, sizeof(buf), "Annotated: iOS %d / Android %d",
+             stats.annotations.ios, stats.annotations.android);
+    push_kpi(buf);
+    snprintf(buf, sizeof(buf), "OCR copies: iOS %d / Android %d",
+             stats.ocr_copies.ios, stats.ocr_copies.android);
+    push_kpi(buf);
+    snprintf(buf, sizeof(buf), "Recordings: iOS %d / Android %d",
+             stats.recordings.ios, stats.recordings.android);
+    push_kpi(buf);
+
+    // Table rows, most-recent first.
+    stats_row_cache_.reserve(rows.size());
+    for (auto it = rows.rbegin(); it != rows.rend(); ++it) {
+        std::string line = it->timestamp + "  " + it->event;
+        if (!it->platform.empty()) line += "  " + it->platform;
+        if (!it->device.empty()) line += "  " + it->device;
+        if (it->event == "session_end" && it->duration_sec > 0) {
+            char d[32];
+            snprintf(d, sizeof(d), "  %lldm%02llds", it->duration_sec / 60, it->duration_sec % 60);
+            line += d;
+        }
+        LogRowCache row;
+        row.text = line; row.r = 170; row.g = 170; row.b = 175;
+        row.tex = make_text_texture(sdl_renderer_, line, font_sz, row.r, row.g, row.b, &row.w, &row.h);
+        stats_row_cache_.push_back(std::move(row));
+    }
+}
+
+// Renders KPIs + an "Open CSV" button + a scrollable event table into the
+// same drawer chrome draw_log_panel() already painted. Shares that
+// function's scroll/scrollbar state (log_scroll_offset_, log_sb_*) since
+// only one of Log/Stats content is ever visible at a time.
+void Renderer::draw_stats_drawer_content(int panel_x, int panel_y, int panel_w,
+                                         int panel_h, int pr, int lp_margin) {
+#ifdef _WIN32
+    int full_panel_w = log_panel_full_w_ - lp_margin;
+    if (full_panel_w < 40) full_panel_w = panel_w;
+    int font_sz = std::max(9, panel_h / 85);
+    int line_h = font_sz + 4;
+    int pad = std::max(6, pr);
+    int max_text_w = full_panel_w - pad * 2;
+
+    if (stats_cache_dirty_) {
+        rebuild_stats_cache(font_sz);
+        stats_cache_dirty_ = false;
+    }
+
+    int cy = panel_y + pad;
+    int title_h = std::max(13, font_sz + 6);
+    {
+        int tw = 0, th = 0;
+        SDL_Texture* tt = make_text_texture(sdl_renderer_, "Statistics", title_h, 230, 230, 235, &tw, &th);
+        if (tt) {
+            SDL_Rect dst{panel_x + pad, cy, tw, th};
+            SDL_RenderCopy(sdl_renderer_, tt, nullptr, &dst);
+            SDL_DestroyTexture(tt);
+        }
+    }
+    cy += title_h + pad / 2;
+
+    for (auto& kpi : stats_kpi_cache_) {
+        if (kpi.tex) {
+            SDL_Rect dst{panel_x + pad, cy, kpi.w, kpi.h};
+            SDL_RenderCopy(sdl_renderer_, kpi.tex, nullptr, &dst);
+        }
+        cy += line_h;
+    }
+    cy += pad / 2;
+
+    // "Open CSV" button.
+    int btn_h = std::max(16, font_sz + 10);
+    stats_open_csv_btn_ = {panel_x + pad, cy, max_text_w, btn_h};
+    SDL_SetRenderDrawColor(sdl_renderer_, 60, 90, 130, 255);
+    SDL_Rect bb{stats_open_csv_btn_.x, stats_open_csv_btn_.y, stats_open_csv_btn_.w, stats_open_csv_btn_.h};
+    SDL_RenderFillRect(sdl_renderer_, &bb);
+    SDL_SetRenderDrawColor(sdl_renderer_, 110, 150, 200, 255);
+    SDL_RenderDrawRect(sdl_renderer_, &bb);
+    {
+        int btw = 0, bth = 0;
+        SDL_Texture* btex = make_text_texture(sdl_renderer_, "Open usage_log.csv", font_sz,
+                                              230, 235, 255, &btw, &bth);
+        if (btex) {
+            SDL_Rect td{bb.x + (bb.w - btw) / 2, bb.y + (bb.h - bth) / 2, btw, bth};
+            SDL_RenderCopy(sdl_renderer_, btex, nullptr, &td);
+            SDL_DestroyTexture(btex);
+        }
+    }
+    cy += btn_h + pad;
+
+    SDL_SetRenderDrawColor(sdl_renderer_, 90, 90, 95, 255);
+    SDL_RenderDrawLine(sdl_renderer_, panel_x + pad, cy, panel_x + panel_w - pad, cy);
+    cy += pad / 2;
+
+    int table_top = cy;
+    int visible_h = std::max(line_h, panel_y + panel_h - pad - table_top);
+    int content_h = (int)stats_row_cache_.size() * line_h;
+    int max_scroll = std::max(0, content_h - visible_h);
+    if (log_scroll_offset_ < 0) log_scroll_offset_ = 0;
+    if (log_scroll_offset_ > max_scroll) log_scroll_offset_ = max_scroll;
+
+    SDL_Rect clip = {panel_x + pad, table_top, panel_w - pad * 2, visible_h};
+    SDL_RenderSetClipRect(sdl_renderer_, &clip);
+    int first_visible = std::max(0, log_scroll_offset_ / line_h);
+    int last_visible = std::min((int)stats_row_cache_.size(), (log_scroll_offset_ + visible_h) / line_h + 1);
+    for (int i = first_visible; i < last_visible; i++) {
+        int y = table_top + i * line_h - log_scroll_offset_;
+        auto& row = stats_row_cache_[i];
+        if (row.tex) {
+            SDL_Rect dst{panel_x + pad, y, row.w, row.h};
+            SDL_RenderCopy(sdl_renderer_, row.tex, nullptr, &dst);
+        }
+    }
+    SDL_RenderSetClipRect(sdl_renderer_, nullptr);
+
+    if (content_h > visible_h) {
+        int sb_w = std::max(3, pad / 3);
+        int sb_x = panel_x + panel_w - pad;
+        int track_y = table_top;
+        int track_h = visible_h;
+        float visible_frac = (float)visible_h / content_h;
+        int thumb_h = std::max(pr * 2, (int)(track_h * visible_frac));
+        float scroll_frac = (max_scroll > 0) ? (float)log_scroll_offset_ / max_scroll : 0.0f;
+        int thumb_y = track_y + (int)((track_h - thumb_h) * scroll_frac);
+
         log_sb_track_y_ = track_y;
         log_sb_track_h_ = track_h;
         log_sb_thumb_h_ = thumb_h;
@@ -6677,6 +7065,56 @@ void Renderer::draw_android_help() {
     }
 }
 
+bool Renderer::emit_screenshot_output(const uint8_t* rgba, int w, int h, int stride,
+                                      const std::string& filename,
+                                      const std::string& snagit_path,
+                                      bool save, bool clip, bool snag) {
+    std::vector<uint8_t> resized;
+    const uint8_t* out_rgba = rgba;
+    int out_w = w, out_h = h, out_stride = stride;
+    std::string out_filename = filename;
+    int out_dpi = 0; // 0 = no DPI metadata written (unresized path)
+    if (settings_.screenshot_resize_enabled && settings_.screenshot_resize_height_cm >= 0.5f && h > 0) {
+        // Render at print-quality DPI and embed that same DPI in the file
+        // (pHYs chunk) so Office reports the correct physical height from
+        // the metadata instead of assuming 96 DPI — this is what keeps the
+        // image looking sharp instead of soft/blocky at the target size.
+        const int dpi = 300;
+        int target_h = std::max(1, (int)std::lround(settings_.screenshot_resize_height_cm / 2.54 * dpi));
+        int target_w = std::max(1, (int)std::lround((double)w * target_h / (double)h));
+        resized = resize_rgba_bilinear(rgba, w, h, stride, target_w, target_h);
+        out_rgba = resized.data();
+        out_w = target_w; out_h = target_h; out_stride = target_w * 4;
+        out_dpi = dpi;
+        char tag[32];
+        float cm = settings_.screenshot_resize_height_cm;
+        if (std::abs(cm - std::round(cm)) < 0.01f)
+            snprintf(tag, sizeof(tag), "-h%dcm", (int)std::lround(cm));
+        else
+            snprintf(tag, sizeof(tag), "-h%.1fcm", cm);
+        auto dot = filename.rfind('.');
+        out_filename = (dot == std::string::npos) ? (filename + tag)
+                                                    : (filename.substr(0, dot) + tag + filename.substr(dot));
+    }
+
+    bool wrote = true;
+    if (save) {
+        wrote = write_png_file_dpi(out_filename, out_w, out_h, out_rgba, out_stride, out_dpi);
+        if (wrote && out_filename != filename && settings_.screenshot_save_original_too) {
+            stbi_write_png(filename.c_str(), w, h, 4, rgba, stride);
+        }
+    } else if (snag && !snagit_path.empty()) {
+        wrote = write_png_file_dpi(snagit_path, out_w, out_h, out_rgba, out_stride, out_dpi);
+    }
+    if (wrote) {
+        if (clip) copy_to_clipboard(out_rgba, out_w, out_h, out_dpi);
+        if (snag) open_in_snagit(save ? out_filename : snagit_path);
+        if (save) std::cout << "[Screenshot] Saved: " << out_filename << " (" << out_w << "x" << out_h << ")\n";
+        else if (clip) std::cout << "[Screenshot] Copied to clipboard (" << out_w << "x" << out_h << ")\n";
+    }
+    return wrote;
+}
+
 void Renderer::take_screenshot() {
     if (last_frame_data_.empty() || last_frame_w_ == 0 || last_frame_h_ == 0) {
         std::cout << "[Screenshot] No frame data available\n";
@@ -6759,19 +7197,9 @@ void Renderer::take_screenshot() {
                     save_rgba = stitched.data();
                 }
             }
-            bool wrote = true;
-            if (save) {
-                wrote = stbi_write_png(filename.c_str(), out_w, save_h, 4, save_rgba, out_w * 4) != 0;
-            } else if (snag && !snagit_path.empty()) {
-                wrote = stbi_write_png(snagit_path.c_str(), out_w, save_h, 4, save_rgba, out_w * 4) != 0;
-            }
-            if (wrote) {
-                saved = true;
-                if (clip) copy_to_clipboard(save_rgba, out_w, save_h);
-                if (snag) open_in_snagit(save ? filename : snagit_path);
-                if (save) std::cout << "[Screenshot] Saved: " << filename << " (" << out_w << "x" << save_h << ")\n";
-                else if (clip) std::cout << "[Screenshot] Copied to clipboard (" << out_w << "x" << save_h << ")\n";
-            }
+            bool wrote = emit_screenshot_output(save_rgba, out_w, save_h, out_w * 4,
+                                               filename, snagit_path, save, clip, snag);
+            if (wrote) saved = true;
         }
     } else {
         const uint8_t* save_rgba = last_frame_data_.data();
@@ -6795,20 +7223,10 @@ void Renderer::take_screenshot() {
                 save_stride = save_w * 4;
             }
         }
-        bool wrote = true;
-        if (save) {
-            wrote = stbi_write_png(filename.c_str(), save_w, save_h, 4,
-                                   save_rgba, save_stride) != 0;
-        } else if (snag && !snagit_path.empty()) {
-            wrote = stbi_write_png(snagit_path.c_str(), save_w, save_h, 4,
-                                   save_rgba, save_stride) != 0;
-        }
+        bool wrote = emit_screenshot_output(save_rgba, save_w, save_h, save_stride,
+                                           filename, snagit_path, save, clip, snag);
         if (wrote) {
             saved = true;
-            if (clip) copy_to_clipboard(save_rgba, save_w, save_h);
-            if (snag) open_in_snagit(save ? filename : snagit_path);
-            if (save) std::cout << "[Screenshot] Saved: " << filename << "\n";
-            else if (clip) std::cout << "[Screenshot] Copied to clipboard\n";
         }
     }
 
@@ -6821,6 +7239,7 @@ void Renderer::take_screenshot() {
         toast_text_ = "Screenshot: " + parts;
         toast_active_ = true;
         toast_start_ = std::chrono::steady_clock::now();
+        opm::UsageLog::log_feature_use("screenshot", active_platform_fn_ ? active_platform_fn_() : std::string());
     }
 }
 
@@ -7393,23 +7812,14 @@ void Renderer::save_annotated() {
         // <date>_<time>_<kind>.png — sorts chronologically alongside
         // plain screenshots saved to the same folder.
         filename = screenshot_dir_ + "/" + timestamp + "_annotated.png";
-        wrote = stbi_write_png(filename.c_str(), annotator_bg_w_, annotator_bg_h_,
-                               4, baked.data(), annotator_bg_w_ * 4) != 0;
     } else if (snag) {
         std::error_code ec;
         auto tmp = std::filesystem::temp_directory_path(ec);
-        if (!ec) {
-            snagit_path = (tmp / ("1PhoneMirror_annot_" + std::string(timestamp) + ".png")).string();
-            wrote = stbi_write_png(snagit_path.c_str(), annotator_bg_w_, annotator_bg_h_,
-                                   4, baked.data(), annotator_bg_w_ * 4) != 0;
-        }
+        if (!ec) snagit_path = (tmp / ("1PhoneMirror_annot_" + std::string(timestamp) + ".png")).string();
     }
-    if (wrote && clip) {
-        copy_to_clipboard(baked.data(), annotator_bg_w_, annotator_bg_h_);
-    }
-    if (wrote && snag) {
-        open_in_snagit(save ? filename : snagit_path);
-    }
+    wrote = emit_screenshot_output(baked.data(), annotator_bg_w_, annotator_bg_h_,
+                                   annotator_bg_w_ * 4, filename, snagit_path,
+                                   save, clip, snag);
     if (wrote) {
         std::string parts;
         auto add = [&](const char* p){ if (!parts.empty()) parts += " + "; parts += p; };
@@ -7420,6 +7830,7 @@ void Renderer::save_annotated() {
         toast_active_ = true;
         toast_start_ = std::chrono::steady_clock::now();
         if (save) std::cout << "[Annotate] Saved: " << filename << "\n";
+        opm::UsageLog::log_feature_use("annotate", active_platform_fn_ ? active_platform_fn_() : std::string());
     }
     end_annotation();
 }
@@ -8302,6 +8713,7 @@ void Renderer::stop_recording() {
         std::filesystem::path p(out);
         toast_text_ = std::string("Saved ") + p.filename().string();
         std::cout << "[Recorder] Saved: " << out << "\n";
+        opm::UsageLog::log_feature_use("recording", active_platform_fn_ ? active_platform_fn_() : std::string());
     } else {
         toast_text_ = "Recording stopped";
     }
@@ -8309,10 +8721,11 @@ void Renderer::stop_recording() {
     toast_start_  = std::chrono::steady_clock::now();
 }
 
-void Renderer::copy_to_clipboard(const uint8_t* rgba, int w, int h) {
+void Renderer::copy_to_clipboard(const uint8_t* rgba, int w, int h, int dpi) {
 #ifdef _WIN32
     std::vector<uint8_t> png_data;
     stbi_write_png_to_func(png_write_vec, &png_data, w, h, 4, rgba, w * 4);
+    if (dpi > 0) png_set_dpi(png_data, dpi);
 
     if (!OpenClipboard(nullptr)) return;
     EmptyClipboard();
@@ -8348,6 +8761,11 @@ void Renderer::copy_to_clipboard(const uint8_t* rgba, int w, int h) {
         hdr->bV5AlphaMask = 0xFF000000;
         hdr->bV5CSType = LCS_sRGB;
         hdr->bV5Intent = LCS_GM_IMAGES;
+        if (dpi > 0) {
+            LONG ppm = (LONG)std::lround(dpi / 0.0254);
+            hdr->bV5XPelsPerMeter = ppm;
+            hdr->bV5YPelsPerMeter = ppm;
+        }
 
         auto* dst = reinterpret_cast<uint8_t*>(pDib) + hdr_size;
         for (size_t i = 0; i < (size_t)w * h; i++) {
@@ -8937,6 +9355,7 @@ void Renderer::process_ocr_result() {
             // when the text gets long). The recognised text is on the
             // clipboard — no need to echo it back here.
             toast_text_ = "Text copied to clipboard \u2014 ready to paste";
+            opm::UsageLog::log_feature_use("ocr_copy", active_platform_fn_ ? active_platform_fn_() : std::string());
         }
     } else {
         toast_text_ = "OCR failed: " + err;

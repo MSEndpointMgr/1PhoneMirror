@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(1PhoneMirror VERSION 0.5.1 LANGUAGES C CXX)
+project(1PhoneMirror VERSION 0.5.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -64,6 +64,7 @@ set(CORE_SOURCES
     src/main.cpp
     src/app.cpp
     src/settings.cpp
+    src/usage_log.cpp
     ${MEDIA_SOURCES}
     ${NETWORK_SOURCES}
     lib/stb_image_write_impl.c

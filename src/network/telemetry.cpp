@@ -1,7 +1,9 @@
 #include <opm/network/telemetry.h>
+#include <opm/usage_log.h>
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -123,34 +125,6 @@ static bool https_post_json(const wchar_t* host,
 }
 #endif
 
-// --- OS build ------------------------------------------------------------
-
-static std::string os_build_string() {
-#ifdef _WIN32
-    // RtlGetVersion is the only reliable way to get the true Windows
-    // build number from a manifest-less app. GetVersionEx lies starting
-    // from Windows 8.1 unless you ship a compatibility manifest entry
-    // for every release — we already do but RtlGetVersion is safer.
-    using RtlGetVersionPtr = LONG(WINAPI*)(PRTL_OSVERSIONINFOW);
-    HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
-    if (!ntdll) return "0";
-    auto fn = reinterpret_cast<RtlGetVersionPtr>(
-        ::GetProcAddress(ntdll, "RtlGetVersion"));
-    if (!fn) return "0";
-    RTL_OSVERSIONINFOW vi{};
-    vi.dwOSVersionInfoSize = sizeof(vi);
-    if (fn(&vi) != 0) return "0";
-    // "26100.0" — matches WindowsBuildNumber.RevisionNumber surfaced by
-    // Get-ComputerInfo and Intune. The revision is not available from
-    // RtlGetVersion; report as ".0" to keep the schema stable.
-    std::ostringstream oss;
-    oss << vi.dwBuildNumber << ".0";
-    return oss.str();
-#else
-    return "0";
-#endif
-}
-
 // --- JSON encoder (tiny, just what we need) ------------------------------
 
 static std::string json_escape(const std::string& in) {
@@ -248,18 +222,32 @@ void send_launch_ping_async(const std::string& app_version, bool enabled) {
     const std::string url     = OPM_TELEMETRY_URL "/ping";
     const std::string id      = install_id();
     const std::string version = app_version;
-    const std::string osbuild = os_build_string();
+    // Anonymous, aggregate-only usage counts (no device identifiers, no
+    // timestamps, no content) from the local usage log — see
+    // opm::UsageLog and PRIVACY.md for exactly what's tracked locally.
+    const auto stats = UsageLog::compute_stats(UsageLog::load_rows());
 
     if (id.empty()) return;
 
-    std::thread([url, id, version, osbuild]() {
+    std::thread([url, id, version, stats]() {
         // Hard ceiling — WinHTTP timeouts already cap us, but belt-and-braces.
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
 
         std::ostringstream body;
-        body << "{\"install_id\":\"" << json_escape(id)      << "\","
-             <<  "\"version\":\""    << json_escape(version) << "\","
-             <<  "\"os_build\":\""   << json_escape(osbuild) << "\"}";
+        body << "{\"install_id\":\""      << json_escape(id)      << "\","
+             <<  "\"version\":\""          << json_escape(version) << "\","
+             <<  "\"sessions_ios\":"       << stats.ios_sessions     << ","
+             <<  "\"minutes_ios\":"        << (long long)std::lround(stats.ios_minutes) << ","
+             <<  "\"sessions_android\":"   << stats.android_sessions << ","
+             <<  "\"minutes_android\":"    << (long long)std::lround(stats.android_minutes) << ","
+             <<  "\"screenshots_ios\":"    << stats.screenshots.ios     << ","
+             <<  "\"screenshots_android\":" << stats.screenshots.android << ","
+             <<  "\"annotations_ios\":"    << stats.annotations.ios     << ","
+             <<  "\"annotations_android\":" << stats.annotations.android << ","
+             <<  "\"ocr_copies_ios\":"     << stats.ocr_copies.ios      << ","
+             <<  "\"ocr_copies_android\":" << stats.ocr_copies.android  << ","
+             <<  "\"recordings_ios\":"     << stats.recordings.ios      << ","
+             <<  "\"recordings_android\":" << stats.recordings.android  << "}";
 
         ParsedUrl pu = parse_https_url(url);
         if (pu.host.empty() || pu.path.empty()) return;

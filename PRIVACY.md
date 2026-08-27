@@ -24,10 +24,10 @@ internet requests against systems operated by the maintainer:
 | **Sent** | Once per app launch, fire-and-forget (failure does not affect the app) |
 | **Default** | **Enabled** |
 | **Opt out** | Open the app, press `S` (Settings), toggle off **Telemetry**. The setting is saved to `%APPDATA%\1PhoneMirror\settings.ini` (`telemetry_enabled=0`) and respected on the next launch. |
-| **Payload** | JSON: `{"install_id": "<random GUID>", "version": "0.4.x", "os_build": "<Windows build number>"}` |
+| **Payload** | JSON: `{"install_id": "<random GUID>", "version": "0.4.x", "sessions_ios": 0, "minutes_ios": 0, "sessions_android": 0, "minutes_android": 0, "screenshots_ios": 0, "screenshots_android": 0, "annotations_ios": 0, "annotations_android": 0, "ocr_copies_ios": 0, "ocr_copies_android": 0, "recordings_ios": 0, "recordings_android": 0}` — the numeric fields are lifetime totals read from the local usage log described below; no per-device identifiers, timestamps, or content are included. |
 | **`install_id`** | Generated locally on first launch, stored at `%LOCALAPPDATA%\1PhoneMirror\install_id.txt`. Deliberately placed in **LocalAppData** so it does **not** roam to other PCs. Delete the file to reset it. |
-| **Purpose** | Counting active installs and crash-free launches per version so the maintainer can prioritise fixes. |
-| **What is *not* sent** | No username, no machine name, no email, no IP address logged at the application layer (the server only sees what every HTTP request exposes — IP visible in transit, not stored), no phone information, no mirrored content, no screenshots, no recordings. |
+| **Purpose** | Counting active installs and version adoption, and understanding aggregate iOS vs. Android feature usage (mirroring minutes, screenshots, annotations, OCR copies, recordings) so the maintainer can prioritise fixes and platforms. |
+| **What is *not* sent** | No username, no machine name, no email, no IP address logged at the application layer (the server only sees what every HTTP request exposes — IP visible in transit, not stored), no phone information, no device identifiers, no mirrored content, no screenshots, no recordings, no Windows build number. |
 | **Retention** | Pings are stored as Azure Application Insights events under the maintainer's subscription and retained per the [Application Insights default retention](https://learn.microsoft.com/azure/azure-monitor/app/data-retention-privacy) (90 days unless changed). |
 | **Third parties** | The endpoint is hosted on Microsoft Azure (data centre region as configured). Microsoft Azure's privacy policy applies in transit and at rest. |
 

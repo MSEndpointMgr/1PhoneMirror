@@ -83,6 +83,9 @@ Settings Settings::load() {
             else if (k == "screenshot_save_to_folder")   s.screenshot_save_to_folder   = (v == "1" || v == "true");
             else if (k == "screenshot_copy_to_clipboard") s.screenshot_copy_to_clipboard = (v == "1" || v == "true");
             else if (k == "screenshot_open_in_snagit")    s.screenshot_open_in_snagit    = (v == "1" || v == "true");
+            else if (k == "screenshot_resize_enabled")    s.screenshot_resize_enabled    = (v == "1" || v == "true");
+            else if (k == "screenshot_resize_height_cm")  s.screenshot_resize_height_cm  = std::clamp(std::stof(v), 0.5f, 50.0f);
+            else if (k == "screenshot_save_original_too") s.screenshot_save_original_too = (v == "1" || v == "true");
             else if (k == "use_computer_name")            s.use_computer_name            = (v == "1" || v == "true");
             else if (k == "telemetry_enabled")            s.telemetry_enabled            = (v == "1" || v == "true");
             else if (k == "always_on_top")                s.always_on_top                = (v == "1" || v == "true");
@@ -109,6 +112,9 @@ bool Settings::save() const {
     f << "screenshot_save_to_folder="   << (screenshot_save_to_folder   ? "1" : "0") << "\n";
     f << "screenshot_copy_to_clipboard=" << (screenshot_copy_to_clipboard ? "1" : "0") << "\n";
     f << "screenshot_open_in_snagit="  << (screenshot_open_in_snagit  ? "1" : "0") << "\n";
+    f << "screenshot_resize_enabled="  << (screenshot_resize_enabled  ? "1" : "0") << "\n";
+    f << "screenshot_resize_height_cm=" << screenshot_resize_height_cm << "\n";
+    f << "screenshot_save_original_too=" << (screenshot_save_original_too ? "1" : "0") << "\n";
     f << "use_computer_name="           << (use_computer_name           ? "1" : "0") << "\n";
     f << "telemetry_enabled="           << (telemetry_enabled           ? "1" : "0") << "\n";
     f << "always_on_top="               << (always_on_top               ? "1" : "0") << "\n";

@@ -1,6 +1,7 @@
 #include <opm/app.h>
 #include <opm/config.h>
 #include <opm/settings.h>
+#include <opm/usage_log.h>
 #include <opm/network/telemetry.h>
 #include <algorithm>
 #include <chrono>
@@ -82,6 +83,7 @@ App::~App() { shutdown(); }
 
 bool App::init(const Config& config) {
     config_ = config;
+    UsageLog::log_app_start();
 
     std::cout << "========================================\n";
     std::cout << "  " << OPM_APP_NAME << " v"
@@ -95,6 +97,16 @@ bool App::init(const Config& config) {
         std::cerr << "[App] Failed to initialize renderer\n";
         return false;
     }
+
+    // Tags screenshot/annotate/OCR/recording usage-log rows with whichever
+    // protocol is currently mirroring.
+    renderer_.set_active_platform_provider([this]() -> std::string {
+        switch (static_cast<Source>(active_source_.load())) {
+            case Source::AirPlay: return "iOS";
+            case Source::None:    return "";
+            default:              return "Android"; // Android, Miracast, Cast
+        }
+    });
 
     // Initialize audio output
     if (!audio_.init(44100, 2)) {
@@ -132,6 +144,32 @@ bool App::init(const Config& config) {
         airplay_.set_pin_display_callback([this](const std::string& pin) {
             renderer_.set_pin_code(pin);
         });
+
+        // Usage-log session tracking, per iOS device: this callback fires
+        // with the FULL current source list on every connect/disconnect,
+        // so diffing against what we've already logged gives one
+        // session_start/session_end per iPhone even with several connected
+        // at once (the None<->AirPlay active_source_ transition above only
+        // tells us whether AirPlay-as-a-whole is in use, not per-device).
+        airplay_.set_sources_callback(
+            [this](const std::vector<airplay::AirPlayServer::SourceInfo>& sources) {
+                std::lock_guard lk(airplay_sources_mutex_);
+                std::map<std::string, std::string> live;
+                for (auto& s : sources) live[s.id] = s.name;
+                for (auto& [id, name] : live) {
+                    if (!airplay_logged_sources_.count(id))
+                        UsageLog::log_session_start("iOS", name.empty() ? id : name);
+                }
+                for (auto it = airplay_logged_sources_.begin(); it != airplay_logged_sources_.end(); ) {
+                    if (!live.count(it->first)) {
+                        UsageLog::log_session_end("iOS", it->second.empty() ? it->first : it->second);
+                        it = airplay_logged_sources_.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                airplay_logged_sources_ = std::move(live);
+            });
 
         // Multi-source picker wiring (AirPlay sources + Android, when active)
         renderer_.set_source_provider(
@@ -230,7 +268,8 @@ bool App::init(const Config& config) {
     if (config_.enable_miracast) {
         miracast_.set_video_callback([this](media::VideoFrame frame) {
             int expected = static_cast<int>(Source::None);
-            active_source_.compare_exchange_strong(expected, static_cast<int>(Source::Miracast));
+            if (active_source_.compare_exchange_strong(expected, static_cast<int>(Source::Miracast)))
+                UsageLog::log_session_start("Android");
             if (active_source_.load() == static_cast<int>(Source::Miracast))
                 renderer_.submit_frame(std::move(frame));
         });
@@ -249,8 +288,10 @@ bool App::init(const Config& config) {
         }
         miracast_.set_disconnect_callback([this]() {
             int expected = static_cast<int>(Source::Miracast);
-            if (active_source_.compare_exchange_strong(expected, static_cast<int>(Source::None)))
+            if (active_source_.compare_exchange_strong(expected, static_cast<int>(Source::None))) {
+                UsageLog::log_session_end("Android");
                 renderer_.request_reset();
+            }
         });
     }
 #endif
@@ -259,7 +300,8 @@ bool App::init(const Config& config) {
     if (config_.enable_cast) {
         cast_.set_video_callback([this](media::VideoFrame frame) {
             int expected = static_cast<int>(Source::None);
-            active_source_.compare_exchange_strong(expected, static_cast<int>(Source::Cast));
+            if (active_source_.compare_exchange_strong(expected, static_cast<int>(Source::Cast)))
+                UsageLog::log_session_start("Android");
             if (active_source_.load() == static_cast<int>(Source::Cast))
                 renderer_.submit_frame(std::move(frame));
         });
@@ -279,8 +321,10 @@ bool App::init(const Config& config) {
         }
         cast_.set_disconnect_callback([this]() {
             int expected = static_cast<int>(Source::Cast);
-            if (active_source_.compare_exchange_strong(expected, static_cast<int>(Source::None)))
+            if (active_source_.compare_exchange_strong(expected, static_cast<int>(Source::None))) {
+                UsageLog::log_session_end("Android");
                 renderer_.request_reset();
+            }
         });
     }
 #endif
@@ -558,6 +602,12 @@ void App::shutdown() {
         return;
     }
     running_.store(false);
+
+    // Close out any sessions still open (e.g. user quit mid-mirror) so the
+    // usage log never ends up with a dangling session_start — handles any
+    // number of concurrent iOS/Android devices, not just one.
+    UsageLog::close_all_open_sessions();
+    UsageLog::log_app_stop();
 
 #if defined(_WIN32) && defined(ENABLE_ANDROID)
     // Kill adb FIRST, before any other teardown step. Three reasons:

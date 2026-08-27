@@ -3,7 +3,7 @@
 A minimal Azure backend that gives the project two things the public winget repo and GitHub Releases page cannot:
 
 1. **`GET /dl/{version}/{file}`** — logs the request (version, client class, country, UA) then 302-redirects to the real GitHub Release asset. Used as the `InstallerUrl` in the winget manifest so that **every winget install and every direct browser download is counted**.
-2. **`POST /ping`** — opt-in anonymous "the app launched" beacon from the desktop client. Body: `{ "install_id": "<guid>", "version": "0.3.8", "os_build": "26100.1234" }`. Lets us measure **daily active installs** and **version adoption**, not just downloads.
+2. **`POST /ping`** — opt-in anonymous "the app launched" beacon from the desktop client. Body: `{ "install_id": "<guid>", "version": "0.4.x", "sessions_ios": 0, "minutes_ios": 0, "sessions_android": 0, "minutes_android": 0, "screenshots_ios": 0, "screenshots_android": 0, "annotations_ios": 0, "annotations_android": 0, "ocr_copies_ios": 0, "ocr_copies_android": 0, "recordings_ios": 0, "recordings_android": 0 }`. Lets us measure **daily active installs**, **version adoption**, and aggregate **iOS vs. Android feature usage** — not just downloads.
 
 A third route, `GET /healthz`, is just an uptime probe.
 
@@ -15,9 +15,10 @@ A third route, `GET /healthz`, is just an uptime probe.
 | `client` | derived from User-Agent | `winget` / `browser` / `curl` / `powershell` / `other` |
 | `country` | `CF-IPCountry` / `X-Azure-ClientIP-Country` header | 2-letter code only |
 | `install_id` | client-generated GUID, stored once in `%LOCALAPPDATA%\1PhoneMirror\install_id.txt` | not a user ID — uninstall + reinstall = new ID |
-| `os_build` | `RtlGetVersion` from desktop app | e.g. `26100.1234` |
+| `sessions_ios`, `minutes_ios`, `sessions_android`, `minutes_android` | client's local usage log (`opm::UsageLog`) | lifetime totals as of the ping; mirroring session counts/minutes, no device identifiers |
+| `screenshots_*`, `annotations_*`, `ocr_copies_*`, `recordings_*` | client's local usage log | lifetime totals per feature, split iOS vs. Android |
 
-**Not stored:** IP address, hostname, username, MAC, screen contents, anything from the mirrored phone.
+**Not stored:** IP address, hostname, username, MAC, Windows build number, screen contents, anything from the mirrored phone.
 
 App Insights retention is set to **730 days interactive + 4383 days archive (~12 years total)** — the platform maximum; Azure does not offer true unlimited retention. The workspace is capped at **1 GB/day** so a stuck client cannot generate a surprise bill.
 
@@ -53,7 +54,7 @@ $base = (azd env get-values | Select-String FUNCTION_APP_URL).ToString().Split('
 Invoke-RestMethod "$base/healthz"
 Invoke-WebRequest "$base/dl/0.3.8/1PhoneMirror-0.3.8.msi" -MaximumRedirection 0 -SkipHttpErrorCheck
 Invoke-RestMethod -Method Post "$base/ping" -ContentType application/json `
-    -Body '{"install_id":"11111111-1111-1111-1111-111111111111","version":"0.3.8","os_build":"26100.1234"}'
+    -Body '{"install_id":"11111111-1111-1111-1111-111111111111","version":"0.3.8","sessions_ios":1,"minutes_ios":5,"sessions_android":0,"minutes_android":0,"screenshots_ios":2,"screenshots_android":0,"annotations_ios":0,"annotations_android":0,"ocr_copies_ios":0,"ocr_copies_android":0,"recordings_ios":0,"recordings_android":0}'
 ```
 
 Subsequent code-only deploys: `azd deploy`.

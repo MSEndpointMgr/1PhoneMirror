@@ -22,6 +22,17 @@ struct Settings {
     // file just so Snagit can pick it up.
     bool screenshot_open_in_snagit = false;
 
+    // When true, screenshots/annotated captures are downscaled so the
+    // image height matches screenshot_resize_height_cm when pasted into a
+    // document at 96 DPI (Word's default for images without embedded
+    // resolution metadata). The resized image is what gets saved/copied/
+    // opened in Snagit; its filename gets a "-h<X>cm" suffix.
+    bool  screenshot_resize_enabled = false;
+    float screenshot_resize_height_cm = 10.0f;
+    // When true (and resize is enabled), also save an unsuffixed copy of
+    // the original, full-resolution image alongside the resized one.
+    bool  screenshot_save_original_too = false;
+
     // Recording behaviour. format: 0 = MP4 (H.264), 1 = GIF.
     int  record_format = 0;
     int  record_max_duration_sec = 60;  // 0 = unlimited
@@ -40,9 +51,10 @@ struct Settings {
     bool always_on_top = false;
 
     // Opt-in anonymous launch ping. When true, the app POSTs a one-shot
-    // {install_id, version, os_build} payload to the telemetry endpoint on
-    // each launch. No IP, hostname, username, MAC, or screen contents are
-    // sent. Defaults to false; user enables it from the Settings panel.
+    // {install_id, version, <anonymous usage counts>} payload to the
+    // telemetry endpoint on each launch. No IP, hostname, username, MAC,
+    // device identifiers, or screen contents are sent. Defaults to false;
+    // user enables it from the Settings panel.
     bool telemetry_enabled = true;
 
     // Webcam drawer (TODO.md #9). Persisted so the user's "show my hands"

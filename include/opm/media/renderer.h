@@ -61,6 +61,12 @@ public:
         disconnect_source_fn_ = std::move(disc);
     }
 
+    // Returns "iOS" / "Android" for whichever protocol is currently
+    // mirroring (empty if none), used to tag per-platform usage-log rows
+    // for screenshot/annotate/OCR/recording actions.
+    using ActivePlatformFn = std::function<std::string()>;
+    void set_active_platform_provider(ActivePlatformFn fn) { active_platform_fn_ = std::move(fn); }
+
     // Triggered by the user pressing 'A' on the idle screen — App pops up a
     // pair/connect dialog and starts the Android receiver.
     using AddAndroidFn = std::function<void()>;
@@ -121,11 +127,19 @@ private:
     int ui_ref_width() const;
     void take_screenshot();
     void open_screenshot_folder();
+    // Applies the optional resize-to-height-in-cm setting, then handles
+    // save/clipboard/Snagit output for a single rendered capture. Shared by
+    // take_screenshot() and save_annotated(). Returns true if any output
+    // path succeeded (drives the toast + "saved" bookkeeping).
+    bool emit_screenshot_output(const uint8_t* rgba, int w, int h, int stride,
+                                const std::string& filename,
+                                const std::string& snagit_path,
+                                bool save, bool clip, bool snag);
     // Recording lifecycle helpers (called only from the renderer thread).
     void start_recording();
     void stop_recording();
     std::string make_recording_path() const;
-    void copy_to_clipboard(const uint8_t* rgba, int w, int h);
+    void copy_to_clipboard(const uint8_t* rgba, int w, int h, int dpi = 0);
     void update_window_shape();
     void begin_window_drag();
     void load_icon_texture();
@@ -204,6 +218,7 @@ private:
     // Source picker (small numbered dots in bottom bezel)
     GetSourcesFn get_sources_fn_;
     SetActiveFn set_active_source_fn_;
+    ActivePlatformFn active_platform_fn_;
     DisconnectFn disconnect_source_fn_;
     AddAndroidFn add_android_fn_;
     std::vector<std::pair<std::string, BtnRect>> source_btns_;    // Right-click popup menu over any bezel button.
@@ -379,6 +394,10 @@ private:
     BtnRect settings_toggle_telemetry_btn_;
     BtnRect settings_toggle_webcam_mirror_btn_;
     BtnRect settings_toggle_webcam_record_btn_;
+    BtnRect settings_toggle_resize_btn_;
+    BtnRect settings_resize_minus_btn_;
+    BtnRect settings_resize_plus_btn_;
+    BtnRect settings_toggle_save_original_btn_;
     // Session-only toggle: when on, std::cout is mirrored to
     // <screenshot_dir>/1PhoneMirror.log. Reset to false on every launch
     // (intentionally NOT persisted to settings.ini).
@@ -447,6 +466,23 @@ private:
     int log_sb_thumb_h_ = 0;
     int log_sb_max_scroll_ = 0;
     void draw_log_panel();
+
+    // The Log/Statistics drawer is a single slide-out panel (shared
+    // animation/geometry/scrollbar state above); drawer_mode_ picks which
+    // content draw_log_panel() renders into it.
+    enum class DrawerMode { Log, Stats };
+    DrawerMode drawer_mode_ = DrawerMode::Log;
+    // Opens the drawer in `mode`, switches its content if already open in
+    // a different mode, or closes it if already open in the same mode.
+    void toggle_drawer(DrawerMode mode);
+    BtnRect stats_btn_; // right bezel star button, below the log one
+    BtnRect stats_open_csv_btn_;
+    bool stats_cache_dirty_ = true; // rebuilt next time the Stats drawer draws
+    std::vector<LogRowCache> stats_kpi_cache_;
+    std::vector<LogRowCache> stats_row_cache_;
+    void rebuild_stats_cache(int font_sz);
+    void draw_stats_drawer_content(int panel_x, int panel_y, int panel_w,
+                                   int panel_h, int pr, int lp_margin);
 
     // Webcam drawer (TODO.md #9). Geometry mirrors the log panel rotated
     // 90 degrees: anchored to the bottom edge of the phone frame, inset

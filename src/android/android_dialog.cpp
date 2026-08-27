@@ -3,6 +3,7 @@
 #ifdef ENABLE_ANDROID
 
 #include <opm/app.h>
+#include <opm/usage_log.h>
 
 #include <algorithm>
 #include <chrono>
@@ -95,6 +96,10 @@ bool App::start_android_session_(const std::string& serial,
         if (model.empty()) model = pretty(sess->receiver->device_name());
         sess->model = model;
     }
+    // Device label identifies THIS phone in the usage log so concurrent or
+    // back-to-back Android connections are distinguishable (serial is
+    // always unique; the model name is appended for readability).
+    std::string device_label = serial + (sess->model.empty() ? "" : (" " + sess->model));
     {
         std::lock_guard lk(scrcpy_mutex_);
         // Make the just-started session the active one so the user sees
@@ -104,6 +109,7 @@ bool App::start_android_session_(const std::string& serial,
         scrcpy_sessions_.push_back(std::move(sess));
     }
     active_source_.store(static_cast<int>(Source::Android));
+    UsageLog::log_session_start("Android", device_label);
     return true;
 }
 
@@ -278,6 +284,8 @@ void App::android_disconnect(const std::string& serial) {
         if (!s) continue;
         if (s->receiver) s->receiver->stop();
         adb_.disconnect(s->serial);
+        std::string device_label = s->serial + (s->model.empty() ? "" : (" " + s->model));
+        UsageLog::log_session_end("Android", device_label);
     }
     // If the (or one of the) torn-down sessions was the active source,
     // either fall back to the most-recent remaining session or return to
@@ -301,7 +309,9 @@ void App::android_disconnect(const std::string& serial) {
                 should_reset = true;
         }
     }
-    if (should_reset) renderer_.request_reset();
+    if (should_reset) {
+        renderer_.request_reset();
+    }
 }
 
 } // namespace opm

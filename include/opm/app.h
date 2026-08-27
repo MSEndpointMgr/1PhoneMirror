@@ -4,6 +4,7 @@
 #include <opm/media/decoder.h>
 #include <opm/media/renderer.h>
 #include <atomic>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -94,6 +95,15 @@ private:
 
 #ifdef ENABLE_AIRPLAY
     airplay::AirPlayServer airplay_;
+    // Tracks which AirPlay source ids we've already logged a usage-log
+    // session_start for, so set_sources_callback() (which fires with the
+    // FULL current list on every add/remove) can diff and log exactly one
+    // session_start/session_end per iOS device — including when several
+    // iPhones are connected at once. Keyed by source id, value is the
+    // display name used at session_end time (server no longer has it once
+    // the source is gone).
+    std::mutex                          airplay_sources_mutex_;
+    std::map<std::string, std::string>  airplay_logged_sources_;
 #endif
 #ifdef ENABLE_MIRACAST
     miracast::MiracastReceiver miracast_;
