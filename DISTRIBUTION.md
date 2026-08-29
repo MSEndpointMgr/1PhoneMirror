@@ -23,26 +23,15 @@ In the **MSEndpointMgr** GitHub org, create a new **public** repository named
 The public repo's `main` branch must exist before the first release (the
 release workflow creates tags off `main`).
 
-### 2. Create a `PUBLIC_RELEASE_TOKEN` (cross-repo publish)
+### 2. Public-repo publish access (manual `gh` login)
 
-A fine-grained PAT scoped to **only** `MSEndpointMgr/1PhoneMirror`:
+Releases are published by hand with `gh release create`, so you just need a
+`gh` login on an account with **Write** access to `MSEndpointMgr/1PhoneMirror`
+(`gh auth status` should show scope `repo`).
 
-- GitHub → your profile → **Settings** → **Developer settings** →
-  **Personal access tokens** → **Fine-grained tokens** → **Generate new token**
-- Resource owner: `MSEndpointMgr`
-- Repository access: Only select repositories → `MSEndpointMgr/1PhoneMirror`
-- Permissions: **Contents: Read and write**
-- Expiration: 1 year (calendar reminder to rotate)
-
-> If MSEndpointMgr requires PAT approval, an org admin must approve the token
-> before it works. Falls back to a classic PAT with `repo` scope if needed.
-
-Store it in the **private** source repo:
-
-```powershell
-gh secret set PUBLIC_RELEASE_TOKEN --repo SimonSkotheimsvik/1PhoneMirror
-# paste the PAT when prompted
-```
+> The old `PUBLIC_RELEASE_TOKEN` repo secret (a fine-grained PAT for CI
+> cross-repo publishing) is **no longer used** — CI does not publish releases.
+> You can delete that secret if it still exists.
 
 ### 3. Create a `WINGET_TOKEN` for winget-releaser
 
@@ -61,14 +50,15 @@ gh secret set WINGET_TOKEN --repo SimonSkotheimsvik/1PhoneMirror
 The package identifier `MSEndpointMgr.1PhoneMirror` does not yet exist in the
 catalog, so the automated update path can't run.
 
-**Prerequisite:** the **public** release must already exist. Tag and push from
-the private repo first to trigger `.github/workflows/release.yml`, which builds
-the MSI and pushes it to `MSEndpointMgr/1PhoneMirror/releases/v0.2.0`:
+**Prerequisite:** the **public** release must already exist. Build and sign
+the MSI locally, then publish it by hand (CI does NOT build or release):
 
 ```powershell
-git tag v0.2.0
-git push origin v0.2.0
-# Wait for the "Build & Release MSI" workflow to finish (Actions tab).
+.\scripts\release.ps1 -Version 0.2.0   # builds + Azure Trusted Signs + hashes the exact MSI
+gh release create v0.2.0 "dist\1PhoneMirror-0.2.0.msi" `
+    --repo MSEndpointMgr/1PhoneMirror `
+    --title "1PhoneMirror 0.2.0" `
+    --notes "<release notes>"
 # Confirm the asset exists at:
 #   https://github.com/MSEndpointMgr/1PhoneMirror/releases/tag/v0.2.0
 ```
@@ -113,10 +103,11 @@ Wait for the moderator at `microsoft/winget-pkgs` to merge the PR (usually a few
 
 ## Standard release routine (every new version)
 
-> **Current status (2026-05):** `PUBLIC_RELEASE_TOKEN` has not been approved by
-> the MSEndpointMgr org, so the automated release workflow cannot push to the
-> public repo. **Until that PAT is approved, use the manual routine below.**
-> The fully-automated routine is documented further down for the day approval lands.
+> **Release model (2026-08):** CI does **not** build or release the MSI.
+> The signed MSI produced locally by `scripts/release.ps1` (Azure Trusted
+> Signing) is the single source of truth and is published to GitHub Releases
+> by hand. This is the ONLY routine — there is no automated tag-triggered
+> release. The manual steps below are the release process.
 
 ### Step 1 — Bump the version
 
@@ -130,12 +121,15 @@ Update version strings in [`src/media/renderer.cpp`](src/media/renderer.cpp):
 - Info panel header (`info_lines_.push_back(make_info(L"1PhoneMirror v0.2.5", ...`)
 - Add a new entry at the top of the `version_lines_` block (date – version + one-liner)
 
-### Step 2 — Build the MSI locally
+### Step 2 — Build and sign the MSI locally
 
 ```powershell
 Stop-Process -Name 1PhoneMirror -Force -ErrorAction SilentlyContinue
-.\package.ps1
-# Produces dist\1PhoneMirror-0.2.5.msi
+.\scripts\release.ps1 -Version 0.2.5
+# Builds Release, signs the EXE + all bundled DLLs + the MSI via Azure Trusted
+# Signing, then writes dist\1PhoneMirror-0.2.5.msi plus a .sha256 and
+# .release.json computed from the EXACT signed file. Use -SkipSign for an
+# unsigned test build.
 ```
 
 Smoke-test: install, launch, exercise core features, uninstall.
@@ -150,9 +144,8 @@ git push origin main
 git push origin v0.2.5
 ```
 
-> The release CI workflow will trigger on the tag and currently fail at the
-> cross-repo publish step (HTTP 403). Ignore that failure — the manual upload
-> below replaces it.
+> Pushing the tag does **not** trigger any CI build or release. The signed
+> MSI you built in Step 2 is published manually in Step 4 below.
 
 ### Step 4 — Publish the MSI to the public repo (manual)
 
@@ -226,24 +219,22 @@ winget show MSEndpointMgr.1PhoneMirror
 
 ---
 
-## Fully-automated routine (when `PUBLIC_RELEASE_TOKEN` is approved)
+## CI does not build or release (by design)
 
-Once an MSEndpointMgr org admin approves the fine-grained PAT (or you replace
-it with a classic PAT that has org access), the workflow takes over from the
-tag push:
+There is intentionally **no** automated tag-triggered release. The previous
+"Build & Release MSI" workflow was removed because a CI rebuild produces a
+differently-hashed, **unsigned** MSI that would clobber the signed GitHub
+Release and break winget hash validation.
 
-1. `git tag v0.2.x && git push origin v0.2.x`
-2. `.github/workflows/release.yml` runs on `windows-latest`, restores vcpkg
-   cache, runs `package.ps1 -Version 0.2.x`, computes SHA256, and pushes the
-   MSI to `MSEndpointMgr/1PhoneMirror/releases/v0.2.x` using
-   `PUBLIC_RELEASE_TOKEN`.
-3. `.github/workflows/winget.yml` fires `winget-releaser`, which downloads
-   the public MSI, generates updated manifests, forks `microsoft/winget-pkgs`,
-   and opens a PR — using `WINGET_TOKEN`.
+- [`.github/workflows/release.yml`](.github/workflows/release.yml) is now a
+  **manual `workflow_dispatch` validation build only**. It compiles the app and
+  uploads an *unsigned* artifact for debugging. It never creates or overwrites
+  a GitHub Release.
+- [`.github/workflows/winget.yml`](.github/workflows/winget.yml) is a **manual
+  `workflow_dispatch`** that runs `wingetcreate` against an already-published
+  signed release. It no longer chains off any CI build.
 
-Watch progress under the **Actions** tab. If the publish step fails again
-with `HTTP 403: Resource not accessible by personal access token`, the PAT
-is still not approved — fall back to the manual routine.
+Releases are produced only by the local, signed routine above.
 
 ---
 
@@ -262,21 +253,22 @@ is still not approved — fall back to the manual routine.
 
 | Mistake | Symptom | Fix |
 |---|---|---|
-| Tag without `v` prefix (`0.2.1`) | Release workflow doesn't trigger | Tag is matched by `v*.*.*` |
 | MSI filename mismatch | winget PR fails on download | `1PhoneMirror-<version>.msi` exactly |
 | `WINGET_TOKEN` expired | "Submit to winget" fails 401 | Regenerate PAT, update secret |
 | Changing `UpgradeCode` | Users get duplicate installs instead of upgrade | Never edit it — keep the GUID |
-| Editing manifests in your fork while a PR is open | Conflicts | Let the workflow drive it; if needed, close the PR and rerun |
-| First-time identifier never approved | Auto path can't run | See "One-time setup" — do `wingetcreate new` first |
-| `PUBLIC_RELEASE_TOKEN` not approved by org | `release.yml` fails: `HTTP 403: Resource not accessible by personal access token` | Use the manual routine (Step 4 onwards) until org admin approves the PAT |
+| Editing manifests in your fork while a PR is open | Conflicts | Let `wingetcreate` drive it; if needed, close the PR and rerun |
+| First-time identifier never approved | Submission can't run | See "One-time setup" — do `wingetcreate new` first |
+| Publishing a different MSI than the one you hashed | winget hash mismatch on install | Always publish the exact file `release.ps1` hashed; re-run `wingetcreate` if the asset changed |
 
 ---
 
 ## File reference
 
-- [`.github/workflows/release.yml`](.github/workflows/release.yml) — build + release on tag
-- [`.github/workflows/winget.yml`](.github/workflows/winget.yml) — winget submit on release
-- [`package.ps1`](package.ps1) — local MSI build (also called by CI)
+- [`.github/workflows/release.yml`](.github/workflows/release.yml) — manual validation build only (no release)
+- [`.github/workflows/winget.yml`](.github/workflows/winget.yml) — manual winget submission against a published release
+- [`scripts/release.ps1`](scripts/release.ps1) — local build + Azure Trusted Signing + exact-MSI hash (authoritative)
+- [`scripts/trusted-signing.ps1`](scripts/trusted-signing.ps1) — Azure Trusted Signing helper (dlib download, signtool)
+- [`package.ps1`](package.ps1) — local MSI build/stage/sign
 - [`installer/1PhoneMirror.wxs`](installer/1PhoneMirror.wxs) — WiX 5 source
 - [`CMakeLists.txt`](CMakeLists.txt) — single source of truth for version
 
@@ -284,7 +276,6 @@ is still not approved — fall back to the manual routine.
 
 ## Optional improvements (later)
 
-- **Code signing** — adds an Authenticode signing step in `release.yml` before SHA computation. Requires a code-signing cert (Azure Trusted Signing, DigiCert, Sectigo, etc.).
 - **`vcpkg.json` manifest mode** — pins exact dependency versions for reproducible CI builds and tighter cache keys.
 - **Changelog file** — `CHANGELOG.md` consumed by `softprops/action-gh-release` for richer release notes.
 - **Pre-release channel** — push tags `v0.2.1-beta1`; gate winget submission on a non-prerelease check.

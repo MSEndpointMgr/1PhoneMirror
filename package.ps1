@@ -44,6 +44,11 @@ param(
     [string] $Version,
     [switch] $SkipBuild,
     [string] $SignCertThumbprint,
+    [switch] $AzureSign,
+    [string] $SigningEndpoint = 'https://neu.codesigning.azure.net/',
+    [string] $SigningAccount  = 'ASA-1PhoneMirror',
+    [string] $SigningProfile  = 'PublicTrust1PhoneMirror',
+    [string] $SigningTenantId = '83472170-5be6-45bd-b4a7-464f4d12f820',
     [string] $TimestampUrl = 'http://timestamp.digicert.com',
     [string] $IntuneWinAppUtil
 )
@@ -51,6 +56,27 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
+
+# ---------- Signing setup ----------
+# Two mutually exclusive modes:
+#   -AzureSign            : cloud key via Azure Trusted Signing (no local cert).
+#   -SignCertThumbprint   : legacy local cert in CurrentUser\My.
+$script:DoSign = $AzureSign.IsPresent -or [bool]$SignCertThumbprint
+$script:TsContext = $null
+if ($AzureSign) {
+    . (Join-Path $root 'scripts\trusted-signing.ps1')
+    # Microsoft's timestamp service is the documented default for Trusted Signing.
+    if ($TimestampUrl -eq 'http://timestamp.digicert.com') {
+        $TimestampUrl = 'http://timestamp.acs.microsoft.com'
+    }
+    if ($SigningTenantId) { $env:AZURE_TENANT_ID = $SigningTenantId }
+    Write-Host "==> Azure Trusted Signing: $SigningAccount / $SigningProfile" -ForegroundColor Cyan
+    $script:TsContext = [ordered]@{
+        Signtool = Resolve-Signtool
+        Dlib     = Get-TrustedSigningDlib
+        Metadata = New-TrustedSigningMetadata -Endpoint $SigningEndpoint -AccountName $SigningAccount -ProfileName $SigningProfile
+    }
+}
 
 # ---------- 1. Determine version ----------
 if (-not $Version) {
@@ -150,7 +176,15 @@ if ($ffmpeg.Count -lt 3) {
 
 # ---------- 4. Optional: sign the EXE before packaging ----------
 function Invoke-Signtool([string]$file) {
-    if (-not $SignCertThumbprint) { return }
+    if (-not $script:DoSign) { return }
+    if ($script:TsContext) {
+        Invoke-TrustedSign -File $file `
+            -Signtool $script:TsContext.Signtool `
+            -Dlib $script:TsContext.Dlib `
+            -MetadataPath $script:TsContext.Metadata `
+            -TimestampUrl $TimestampUrl
+        return
+    }
     $signtool = Get-Command signtool.exe -ErrorAction SilentlyContinue
     if (-not $signtool) {
         Write-Warning "signtool.exe not found on PATH — skipping signing of $file"
@@ -162,7 +196,7 @@ function Invoke-Signtool([string]$file) {
     if ($LASTEXITCODE -ne 0) { throw "signtool failed for $file" }
 }
 
-if ($SignCertThumbprint) {
+if ($script:DoSign) {
     Write-Host "==> Signing staged binaries" -ForegroundColor Cyan
     Get-ChildItem $stage -Recurse -Include *.exe, *.dll | ForEach-Object {
         Invoke-Signtool $_.FullName
@@ -217,14 +251,16 @@ if (-not $wix) {
 }
 
 # Ensure the firewall and UI extensions are installed (idempotent).
-# Pin to the same major version as the wix tool itself (v5) — otherwise
-# `wix extension add -g <name>` defaults to v7 and the build fails with
-# "Could not find expected package root folder wixext5".
+# `wix extension add` does NOT accept version wildcards (`5.*` / `5.0.*` both
+# raise WIX0001 "Invalid extension version"). WiX ships each extension at the
+# same version as the tool, so pin to the EXACT tool version. Skip anything
+# already in the global cache so we don't error on a re-add.
 $wixVersion = (& $wix.Source --version) -replace '[^\d.].*$',''
-$wixMinor = ($wixVersion -split '\.')[0..1] -join '.'
-$extVersion = if ($wixMinor) { "$wixMinor.*" } else { '5.*' }
+$cachedExts = (& $wix.Source extension list -g 2>&1) -join "`n"
 foreach ($ext in @('WixToolset.Firewall.wixext', 'WixToolset.UI.wixext')) {
-    $out = & $wix.Source extension add -g "$ext/$extVersion" 2>&1
+    if ($cachedExts -match [regex]::Escape($ext)) { continue }
+    $ref = if ($wixVersion) { "$ext/$wixVersion" } else { $ext }
+    $out = & $wix.Source extension add -g $ref 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "wix extension add $ext failed:`n$out"
     }

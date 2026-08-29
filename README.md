@@ -144,6 +144,7 @@ button on the menu (or use the Windows file dialog) to open it.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **0.6.0** | 29.08.2026 | The installer and application are now **digitally signed** with Azure Trusted Signing (Public Trust), so Windows SmartScreen and Defender recognise 1PhoneMirror as coming from a verified publisher instead of an unknown one. Every bundled executable and DLL is signed and timestamped. |
 | **0.5.2** | 27.08.2026 | New **Statistics** drawer (`T`) — anonymous iOS/Android session, screenshot, annotation, OCR and recording counts, plus a scrollable event log and one-click CSV export. Screenshots can now be **resized to an exact height in cm** (with a print-quality DPI tag so they stay sharp when pasted into Word/PowerPoint). |
 | **0.5.1** | 01.06.2026 | Bezel side buttons: action button, better sizing & visibility. |
 | **0.5.0** | 21.05.2026 | **Webcam drawer** (`W`) — a landscape camera panel that slides out of the phone's bottom bezel, matching the log panel's drawer style. Lists Media Foundation cameras (right-click the bottom `W` button to pick one), live preview at the camera's native resolution, optional horizontal mirror. Screenshots (`Ctrl+S`) and screen recordings (`Ctrl+R`) capture the phone + webcam as one framed composite — WYSIWYG. In-drawer **screenshot button** (left) saves the webcam frame on its own (`<date> <time> Webcam.png`) and right-edge **camera-switch dots** flip between connected cameras. Crash-guard skips webcam auto-start after a failed launch so a bad camera can't lock the app. Version-history panel (`V`) scrollbar is now click-draggable. |
@@ -277,7 +278,7 @@ A quick reference for sponsors and packagers.
 | **Organisation** | [MSEndpointMgr](https://github.com/MSEndpointMgr) |
 | **Distribution** | MSI installer (WiX 5), published via GitHub Releases and the [winget package `MSEndpointMgr.1PhoneMirror`](https://github.com/microsoft/winget-pkgs/tree/master/manifests/m/MSEndpointMgr/1PhoneMirror) |
 | **Artifact name pattern** | `1PhoneMirror-<version>.msi` |
-| **Build pipeline** | GitHub Actions workflow `release.yml` — triggers on tag push `v*`, runs on `windows-latest`, produces the signed-ready MSI as a release asset |
+| **Build pipeline** | Built and signed locally (Azure Trusted Signing) via `scripts/release.ps1`, then published to GitHub Releases by hand. CI (`release.yml`) is a manual validation build only and never publishes a release. |
 | **Reproducible builds** | Yes — vcpkg manifest pins all dependencies (FFmpeg `gpl,x264`, SDL2, OpenSSL); the workflow uses the exact toolchain |
 | **Funding** | https://buymeacoffee.com/simonskothn |
 

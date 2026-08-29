@@ -115,6 +115,11 @@ static LONG WINAPI om_unhandled_filter(EXCEPTION_POINTERS* info) {
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
+static bool confirm_user_action(const char* message, const char* title) {
+    return MessageBoxA(nullptr, message, title,
+                       MB_YESNO | MB_ICONQUESTION) == IDYES;
+}
+
 // Check if 1PhoneMirror firewall rules exist, offer to create them if not
 static void check_firewall_rules() {
     // Query for our TCP rule using netsh
@@ -208,6 +213,11 @@ void print_usage(const char* argv0) {
               << "  --no-miracast      Disable Miracast (Android) receiver\n"
               << "  --no-android       Disable Android (scrcpy) receiver\n"
               << "  --airplay-pin      Require on-screen PIN for AirPlay (managed iOS)\n"
+              << "\nAdministrative / cleanup (explicit opt-in only):\n"
+              << "  --cleanup-stale                   Terminate a stale prior instance (requires confirmation on Windows)\n"
+              << "  --setup-firewall                  Create 1PhoneMirror firewall rules (admin required)\n"
+              << "  --cleanup-adb-on-shutdown         Kill adb.exe during shutdown so ports are released\n"
+              << "  --force-exit-on-timeout           Force exit after shutdown timeout (not recommended)\n"
               << "\nAndroid (scrcpy) options:\n"
               << "  --android-pair <ip:port> <code>   One-time pair via Wireless Debugging\n"
               << "  --android-connect <ip:port>       Connect to a paired device, then exit\n"
@@ -225,13 +235,10 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
     // Install crash handler first so we capture failures during startup too.
     SetUnhandledExceptionFilter(om_unhandled_filter);
-    // Reap any leftover 1PhoneMirror.exe (from a previous crash) before we
-    // try to bind ports or register the mDNS service.
-    kill_stale_instances();
+    // Explicit, opt-in cleanup only. We no longer silently terminate another
+    // process or mutate firewall state on startup without the user's action.
     // Initialize Winsock
     opm::network::TcpServer::init_winsock();
-    // Check and offer to create firewall rules
-    check_firewall_rules();
     // Install log capture (tees cout to internal buffer). File logging
     // is opt-in via the Settings panel toggle (saved alongside the user's
     // screenshots only for the current session).
@@ -288,6 +295,14 @@ int main(int argc, char* argv[]) {
 #endif
         } else if (arg == "--airplay-pin") {
             config.airplay_require_pin = true;
+        } else if (arg == "--cleanup-stale") {
+            config.cleanup_stale_instances = true;
+        } else if (arg == "--setup-firewall") {
+            config.setup_firewall = true;
+        } else if (arg == "--cleanup-adb-on-shutdown") {
+            config.cleanup_adb_on_shutdown = true;
+        } else if (arg == "--force-exit-on-timeout") {
+            config.force_exit_on_timeout = true;
         } else if (arg == "--srp-self-test") {
             bool ok = opm::airplay::srp_pin_self_test();
             return ok ? 0 : 2;
@@ -376,6 +391,25 @@ int main(int argc, char* argv[]) {
             return 1;
         }
     }
+
+#ifdef _WIN32
+    if (config.cleanup_stale_instances) {
+        if (confirm_user_action(
+                "A previous 1PhoneMirror instance may still be holding network ports.\n\n"
+                "Do you want to close it and continue?",
+                "1PhoneMirror - Cleanup previous instance")) {
+            kill_stale_instances();
+        }
+    }
+    if (config.setup_firewall) {
+        if (confirm_user_action(
+                "1PhoneMirror needs to create firewall rules so AirPlay and Android devices can connect.\n\n"
+                "This requires administrator permissions. Continue?",
+                "1PhoneMirror - Firewall setup")) {
+            check_firewall_rules();
+        }
+    }
+#endif
 
     opm::App app;
 

@@ -17,12 +17,17 @@ added by the project lead.
 
 - **Code changes**: accepted through GitHub pull requests, reviewed and
   merged by the project lead.
-- **Releases**: cut from `main` by the project lead via the
-  `Build & Release MSI` GitHub Actions workflow (`v*.*.*` tag push).
+- **Releases**: cut from `main` by the project lead using the local,
+  signed release routine (`scripts/release.ps1`, Azure Trusted Signing),
+  then published to GitHub Releases by hand. CI does not build or release
+  the MSI — see [DISTRIBUTION.md](DISTRIBUTION.md).
 - **Security advisories**: handled per [SECURITY.md](SECURITY.md).
 
 ## Release signing
 
-Official `1PhoneMirror-*.msi` artifacts are currently **unsigned**.
-Users should verify the SHA-256 hash published on the GitHub Release
-page before installing — see [SECURITY.md](SECURITY.md#release-integrity).
+Official `1PhoneMirror-*.msi` artifacts are **signed via Azure Trusted
+Signing** (Public Trust). The MSI and every bundled executable/DLL carry an
+Authenticode signature with an RFC 3161 timestamp. Signing is performed
+locally as part of `scripts/release.ps1`; no signing certificate lives in CI.
+Users can additionally verify the SHA-256 hash published on the GitHub
+Release page before installing — see [SECURITY.md](SECURITY.md#release-integrity).

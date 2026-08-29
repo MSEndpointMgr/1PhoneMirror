@@ -39,6 +39,10 @@ public:
         bool enable_cast = true;
         bool enable_android = true;
         bool airplay_require_pin = false;
+        bool cleanup_stale_instances = false;
+        bool setup_firewall = false;
+        bool cleanup_adb_on_shutdown = false;
+        bool force_exit_on_timeout = false;
 
         // Android (scrcpy) — auto-detected at startup if these are set.
         std::string android_adb_path;          // path to adb.exe (empty = PATH)

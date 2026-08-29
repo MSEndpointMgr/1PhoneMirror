@@ -1,18 +1,17 @@
-name: Build & Release MSI
+name: Build MSI (validation only)
 
-# Builds the MSI and publishes it as a GitHub Release whenever you push
-# a version tag like `v0.2.0`.
-#
-# Manual trigger is also supported (workflow_dispatch) so you can dry-run
-# the build without cutting a release.
+# CI builds the MSI for VALIDATION ONLY. It never publishes a GitHub Release
+# and is NOT triggered by tags. Official releases are produced locally and
+# signed via Azure Trusted Signing (scripts/release.ps1), then published by
+# hand. This keeps the signed, hashed MSI from the local release the single
+# source of truth and prevents CI from rebuilding a differently-hashed,
+# unsigned artifact that would clobber the release and break winget hash
+# validation.
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
 
 permissions:
-  contents: write   # needed to create the GitHub Release
+  contents: read
 
 jobs:
   build:
@@ -24,17 +23,13 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Derive version from tag
+      - name: Derive version
         id: ver
         shell: pwsh
         run: |
-          if ($env:GITHUB_REF -like 'refs/tags/v*') {
-            $v = $env:GITHUB_REF -replace '^refs/tags/v',''
-          } else {
-            # workflow_dispatch — fall back to CMakeLists.txt project version
-            $line = (Select-String -Path CMakeLists.txt -Pattern 'project\([^)]*VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)' | Select-Object -First 1)
-            $v = $line.Matches[0].Groups[1].Value
-          }
+          # Validation builds are not tag-driven; use the CMakeLists version.
+          $line = (Select-String -Path CMakeLists.txt -Pattern 'project\([^)]*VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)' | Select-Object -First 1)
+          $v = $line.Matches[0].Groups[1].Value
           echo "version=$v" >> $env:GITHUB_OUTPUT
           Write-Host "Building version $v"
 
@@ -108,73 +103,18 @@ jobs:
         run: |
           .\package.ps1 -Version ${{ steps.ver.outputs.version }}
 
-      - name: Upload unsigned MSI artifact
-        id: upload_unsigned
-        uses: actions/upload-artifact@v4
-        with:
-          name: 1PhoneMirror-${{ steps.ver.outputs.version }}-msi-unsigned
-          path: dist/1PhoneMirror-${{ steps.ver.outputs.version }}.msi
-          retention-days: 5
-
-
-
-      - name: Compute SHA256 (post-signing)
+      - name: Compute SHA256 (unsigned CI build)
         id: hash
         shell: pwsh
         run: |
           $msi = "dist\1PhoneMirror-${{ steps.ver.outputs.version }}.msi"
           $h = (Get-FileHash $msi -Algorithm SHA256).Hash
           echo "sha256=$h" >> $env:GITHUB_OUTPUT
-          Write-Host "SHA256: $h"
+          Write-Host "SHA256 (unsigned CI build, NOT for release): $h"
 
-      - name: Upload signed MSI artifact
+      - name: Upload MSI artifact (unsigned, validation only)
         uses: actions/upload-artifact@v4
         with:
-          name: 1PhoneMirror-${{ steps.ver.outputs.version }}-msi
+          name: 1PhoneMirror-${{ steps.ver.outputs.version }}-msi-unsigned
           path: dist/1PhoneMirror-${{ steps.ver.outputs.version }}.msi
-          retention-days: 30
-
-      - name: Publish Release to public repo (MSEndpointMgr/1PhoneMirror)
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          # Prefer a dedicated cross-repo token if one is configured (legacy
-          # private-mirror setup); otherwise fall back to the built-in
-          # GITHUB_TOKEN, which has `contents: write` on this repo (granted
-          # by the `permissions:` block above) and works because this
-          # workflow now runs inside MSEndpointMgr/1PhoneMirror itself.
-          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN || github.token }}
-          VERSION: ${{ steps.ver.outputs.version }}
-          SHA256: ${{ steps.hash.outputs.sha256 }}
-          TAG: ${{ github.ref_name }}
-        shell: pwsh
-        run: |
-          $msi = "dist\1PhoneMirror-$env:VERSION.msi"
-          $body = @"
-          **SHA256:** ``$env:SHA256``
-
-          Install via winget once the manifest PR is merged:
-          ``````
-          winget install MSEndpointMgr.1PhoneMirror
-          ``````
-          "@
-          $bodyFile = Join-Path $env:RUNNER_TEMP "release-body.md"
-          Set-Content -Path $bodyFile -Value $body -Encoding UTF8
-
-          # Create the tag in the public repo if it doesn't exist (releases need a ref).
-          $existingTag = gh api "repos/MSEndpointMgr/1PhoneMirror/git/refs/tags/$env:TAG" 2>$null
-          if (-not $existingTag) {
-            # Point the public tag at the public repo's default branch HEAD.
-            $sha = gh api "repos/MSEndpointMgr/1PhoneMirror/git/refs/heads/main" --jq ".object.sha"
-            gh api -X POST "repos/MSEndpointMgr/1PhoneMirror/git/refs" `
-              -f "ref=refs/tags/$env:TAG" -f "sha=$sha" | Out-Null
-          }
-
-          # Create or replace the release.
-          $existingRelease = gh release view $env:TAG --repo MSEndpointMgr/1PhoneMirror 2>$null
-          if ($existingRelease) {
-            gh release delete $env:TAG --repo MSEndpointMgr/1PhoneMirror --yes
-          }
-          gh release create $env:TAG $msi `
-            --repo MSEndpointMgr/1PhoneMirror `
-            --title "1PhoneMirror $env:VERSION" `
-            --notes-file $bodyFile
+          retention-days: 14

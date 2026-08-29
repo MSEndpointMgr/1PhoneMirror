@@ -1,15 +1,13 @@
 name: Submit to winget
 
-# Once the "Build & Release MSI" workflow finishes successfully on a
-# `v*.*.*` tag (which publishes the GitHub Release with the MSI asset),
-# automatically open a PR to microsoft/winget-pkgs updating the manifest.
+# Opens a PR to microsoft/winget-pkgs updating the manifest for a version
+# that has ALREADY been published as a signed GitHub Release.
 #
-# Why `workflow_run` instead of `release: published`?
-#   GitHub deliberately suppresses downstream workflow triggers for events
-#   fired by the default `GITHUB_TOKEN` (loop prevention). Since release.yml
-#   creates the release with `github.token`, a `release: published` trigger
-#   here would never fire automatically. `workflow_run` is not subject to
-#   that suppression and chains reliably without needing a PAT.
+# This is a DELIBERATE, MANUAL action (workflow_dispatch). It intentionally
+# does NOT chain off any CI build: official MSIs are built and signed locally
+# via scripts/release.ps1 and published by hand, so the release asset (and
+# its SHA256) is the trustworthy source of truth. Run this only after the
+# signed release for the given version is live.
 #
 # REQUIRED ONE-TIME SETUP:
 #   1. Make the FIRST submission manually with `wingetcreate new` so the
@@ -19,35 +17,21 @@ name: Submit to winget
 #   3. (Optional) Fork microsoft/winget-pkgs into your account beforehand;
 #      wingetcreate will reuse it.
 on:
-  workflow_run:
-    workflows: ["Build & Release MSI"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (e.g. 0.2.0)'
+        description: 'Version to publish (e.g. 0.2.0) — must already have a signed GitHub Release'
         required: true
 
 jobs:
   publish:
     runs-on: windows-latest
-    # Gate workflow_run trigger: only proceed when the upstream run succeeded
-    # AND was triggered by a `v*.*.*` tag push. `head_branch` on a tag-push
-    # workflow_run carries the tag name (e.g. "v0.5.0").
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       startsWith(github.event.workflow_run.head_branch, 'v'))
     steps:
       - name: Resolve version + asset URL
         id: ctx
         shell: pwsh
         run: |
-          if ('${{ github.event_name }}' -eq 'workflow_run') {
-            $tag = '${{ github.event.workflow_run.head_branch }}'
-          } else {
-            $tag = 'v${{ github.event.inputs.version }}'
-          }
+          $tag = 'v${{ github.event.inputs.version }}'
           $version = $tag -replace '^v',''
           $url = "https://github.com/MSEndpointMgr/1PhoneMirror/releases/download/$tag/1PhoneMirror-$version.msi"
           echo "version=$version" >> $env:GITHUB_OUTPUT
@@ -55,9 +39,8 @@ jobs:
           Write-Host "Version: $version"
           Write-Host "URL:     $url"
 
-          # Wait until the release asset is reachable (the upstream publish
-          # step finishes just before this workflow_run event fires; allow
-          # for CDN propagation). Up to 3 minutes.
+          # The signed release asset must already be published. Confirm it is
+          # reachable before submitting (allow for CDN propagation, up to 3 min).
           $deadline = (Get-Date).AddMinutes(3)
           while ((Get-Date) -lt $deadline) {
             try {

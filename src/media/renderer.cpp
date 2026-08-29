@@ -940,6 +940,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
+        version_lines_.push_back(make_ver(L"29.08.2026 \u2013 0.6.0", 34, 200, 200, 255));
+        version_lines_.push_back(make_desc(L"Installer and app now digitally signed"));
+        version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"27.08.2026 \u2013 0.5.2", 34, 200, 200, 255));
         version_lines_.push_back(make_desc(L"Usage Statistics panel + screenshot resize-to-cm"));
         version_lines_.push_back({nullptr, 0, 0});

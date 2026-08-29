@@ -610,33 +610,43 @@ void App::shutdown() {
     UsageLog::log_app_stop();
 
 #if defined(_WIN32) && defined(ENABLE_ANDROID)
-    // Kill adb FIRST, before any other teardown step. Three reasons:
-    //   1. adb's openscreen mDNS holds UDP 5353 and we MUST release it
-    //      so the iPhone can find our AirPlay service on the next launch.
-    //   2. If we wait until after scrcpy_sessions_.clear() and that hangs,
-    //      the watchdog terminates us before adb is killed and the daemon
-    //      survives.
-    //   3. Killing adb first makes scrcpy_sessions_.clear() faster because
-    //      its blocking adb subprocesses now fail immediately instead of
-    //      waiting for a server that is no longer responding.
-    kill_adb_processes();
+    // Cleanup adb only when the user explicitly requested it. We no longer
+    // silently terminate a separate adb.exe process just because the app is
+    // shutting down; that is a privileged action with side effects.
+    if (config_.cleanup_adb_on_shutdown) {
+        if (MessageBoxA(nullptr,
+                        "1PhoneMirror is about to terminate adb.exe processes to free UDP 5353.\n\n"
+                        "This may affect other Android tools on this system. Continue?",
+                        "1PhoneMirror - Android cleanup",
+                        MB_YESNO | MB_ICONWARNING) == IDYES) {
+            kill_adb_processes();
+        }
+    }
 #endif
 
-    // Watchdog: if any teardown step blocks (e.g. Bonjour's
-    // DNSServiceRefDeallocate occasionally hangs on Windows when the
-    // service is in a degraded state), force-exit the process rather
-    // than leaving the user with a frozen window they can't close.
-    // 5 s is generous for any healthy teardown.
-    std::thread([]() {
-        std::this_thread::sleep_for(std::chrono::seconds(5));
-        std::cerr << "[Shutdown] WATCHDOG: timed out, forcing exit\n";
-        std::cerr.flush();
+    // Watchdog: if any teardown step blocks, do not silently force-exit the
+    // process. If the user explicitly requested a hard timeout policy, ask for
+    // confirmation before terminating the app.
+    if (config_.force_exit_on_timeout) {
+        std::thread([]() {
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            std::cerr << "[Shutdown] WATCHDOG: timed out\n";
+            std::cerr.flush();
 #if defined(_WIN32)
-        TerminateProcess(GetCurrentProcess(), 0);
+            if (MessageBoxA(nullptr,
+                            "1PhoneMirror shutdown is taking too long.\n\n"
+                            "Force exit now?",
+                            "1PhoneMirror - Shutdown timeout",
+                            MB_YESNO | MB_ICONWARNING) == IDYES) {
+                std::cerr << "[Shutdown] WATCHDOG: forcing exit\n";
+                std::cerr.flush();
+                TerminateProcess(GetCurrentProcess(), 0);
+            }
 #else
-        std::_Exit(0);
+            std::_Exit(0);
 #endif
-    }).detach();
+        }).detach();
+    }
 
 #ifdef ENABLE_AIRPLAY
     airplay_.stop();
@@ -650,11 +660,16 @@ void App::shutdown() {
 #ifdef ENABLE_ANDROID
     scrcpy_sessions_.clear();
 #if defined(_WIN32)
-    // Final sweep: scrcpy_sessions_.clear() above (or any late renderer
-    // android-discovery callback) may have spawned a new adb.exe between
-    // the early kill at the top of shutdown() and now. Kill them again so
-    // we exit with UDP 5353 truly released.
-    kill_adb_processes();
+    // Final sweep is only done when the user explicitly opted in.
+    if (config_.cleanup_adb_on_shutdown) {
+        if (MessageBoxA(nullptr,
+                        "1PhoneMirror is about to terminate adb.exe processes again to release UDP 5353.\n\n"
+                        "Continue?",
+                        "1PhoneMirror - Android cleanup",
+                        MB_YESNO | MB_ICONWARNING) == IDYES) {
+            kill_adb_processes();
+        }
+    }
 #endif
 #endif
 

@@ -105,13 +105,22 @@ a Release build before tagging.
 ## Packaging & release
 
 - **MSI:** `.\package.ps1` — builds Release, stages DLLs + VC++ runtime,
-  invokes WiX 5, optionally signs via `-SignCertThumbprint` (local signtool).
-  `-IntuneWinAppUtil <path>` wraps the MSI for Intune. Releases are
-  currently published unsigned; see [GOVERNANCE.md](GOVERNANCE.md#release-signing).
-- **CI release:** push a `v*.*.*` tag on `main` → [.github/workflows/release.yml](.github/workflows/release.yml)
-  builds + uploads the MSI as a GitHub Release asset.
-- **winget:** [.github/workflows/winget.yml](.github/workflows/winget.yml)
-  publishes `MSEndpointMgr.1PhoneMirror`.
+  invokes WiX 5. Signs via Azure Trusted Signing with `-AzureSign` (cloud key,
+  no local cert) or a local cert via `-SignCertThumbprint`.
+  `-IntuneWinAppUtil <path>` wraps the MSI for Intune.
+- **Release (local, authoritative):** `.\scripts\release.ps1` builds, signs
+  (Azure Trusted Signing by default), and computes the SHA256 of the exact
+  signed MSI. This locally-produced signed MSI is the single source of truth;
+  publish it to GitHub Releases by hand. See [GOVERNANCE.md](GOVERNANCE.md#release-signing).
+- **CI does NOT build or release the MSI.**
+  [.github/workflows/release.yml](.github/workflows/release.yml) is a manual
+  `workflow_dispatch` validation build only — it uploads an unsigned artifact
+  and never creates/overwrites a GitHub Release. This prevents CI from
+  clobbering the signed release with a differently-hashed, unsigned rebuild
+  (which previously broke winget hash validation).
+- **winget:** [.github/workflows/winget.yml](.github/workflows/winget.yml) is a
+  manual `workflow_dispatch` that submits `MSEndpointMgr.1PhoneMirror` against
+  an already-published signed release. It no longer chains off any CI build.
 
 ## Telemetry subproject ([telemetry/](telemetry))
 
