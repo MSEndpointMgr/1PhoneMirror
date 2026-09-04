@@ -38,6 +38,15 @@
             "isRequired": true,
             "value": "1h",
             "jsonData": "[{\"value\":\"5m\",\"label\":\"5 minutes\"},{\"value\":\"1h\",\"label\":\"1 hour\",\"selected\":true},{\"value\":\"1d\",\"label\":\"1 day\"}]"
+          },
+          {
+            "id": "selweekday",
+            "version": "KqlParameterItem/1.0",
+            "name": "SelectedWeekday",
+            "type": 1,
+            "description": "Set by clicking a bar in 'Launches by day of week'. 'All' shows every day.",
+            "isRequired": false,
+            "value": "All"
           }
         ]
       },
@@ -127,18 +136,30 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "customEvents | where name == 'Launch' | extend hod = hourofday(timestamp), dow = case(dayofweek(timestamp)==0d,'Sun',dayofweek(timestamp)==1d,'Mon',dayofweek(timestamp)==2d,'Tue',dayofweek(timestamp)==3d,'Wed',dayofweek(timestamp)==4d,'Thu',dayofweek(timestamp)==5d,'Fri','Sat') | summarize Launches = count() by dow, hod | order by hod asc",
+        "query": "customEvents | where name == 'Launch' | extend DayNum = toint(dayofweek(timestamp) / 1d) | summarize Launches = count() by DayNum | extend SortKey = iff(DayNum == 0, 7, DayNum) | order by SortKey asc | project Weekday = case(DayNum==1,'Mon',DayNum==2,'Tue',DayNum==3,'Wed',DayNum==4,'Thu',DayNum==5,'Fri',DayNum==6,'Sat','Sun'), Launches | render columnchart",
         "size": 1,
-        "title": "When users launch the app (hour-of-day x day-of-week)",
+        "title": "Launches by day of week",
         "timeContextFromParameter": "TimeRange",
-        "visualization": "table",
-        "gridSettings": {
-          "formatters": [
-            { "columnMatch": "Launches", "formatter": 4, "formatOptions": { "palette": "blue" } }
-          ]
-        }
+        "visualization": "columnchart",
+        "exportFieldName": "Weekday",
+        "exportParameterName": "SelectedWeekday",
+        "exportDefaultValue": "All"
       },
-      "name": "launch-heatmap"
+      "customWidth": "50",
+      "name": "launch-by-weekday"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customEvents | where name == 'Launch' | extend D = toint(dayofweek(timestamp) / 1d) | extend WkDay = case(D==1,'Mon',D==2,'Tue',D==3,'Wed',D==4,'Thu',D==5,'Fri',D==6,'Sat','Sun') | where '{SelectedWeekday}' == 'All' or WkDay == '{SelectedWeekday}' | summarize Launches = count() by Hour = hourofday(timestamp) | order by Hour asc | render columnchart",
+        "size": 1,
+        "title": "Launches by hour of day (click a weekday to filter)",
+        "timeContextFromParameter": "TimeRange",
+        "visualization": "columnchart"
+      },
+      "customWidth": "50",
+      "name": "launch-by-hour"
     },
     {
       "type": 1,
