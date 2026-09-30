@@ -70,6 +70,51 @@ std::wstring utf8_to_wide(const std::string& s) {
 
 // Locate an IMFActivate matching `device_id` (MF symbolic link, UTF-8).
 // Empty `device_id` returns the first enumerated camera. Caller owns
+
+bool copy_rgb32_frame(const BYTE* data,
+                      DWORD cur_len,
+                      int width,
+                      int height,
+                      LONG row_pitch,
+                      bool bottom_up,
+                      WebcamFrame& frame) {
+    if (!data || width <= 0 || height <= 0) return false;
+
+    const size_t min_row_bytes = size_t(width) * 4;
+    const size_t pitch_bytes   = static_cast<size_t>(row_pitch);
+    if (pitch_bytes < min_row_bytes) return false;
+
+    const size_t required_bytes = pitch_bytes * size_t(height - 1) + min_row_bytes;
+    if (static_cast<size_t>(cur_len) < required_bytes) return false;
+
+    frame.width  = width;
+    frame.height = height;
+    frame.rgba.resize(size_t(width) * size_t(height) * 4);
+
+#if defined(_MSC_VER)
+    __try {
+#endif
+        for (int y = 0; y < height; ++y) {
+            const int src_y = bottom_up ? (height - 1 - y) : y;
+            const uint8_t* src = data + (size_t)src_y * pitch_bytes;
+            uint8_t* dst = frame.rgba.data() + (size_t)y * (size_t)width * 4;
+            for (int x = 0; x < width; ++x) {
+                dst[x * 4 + 0] = src[x * 4 + 2];
+                dst[x * 4 + 1] = src[x * 4 + 1];
+                dst[x * 4 + 2] = src[x * 4 + 0];
+                dst[x * 4 + 3] = 0xFF;
+            }
+        }
+#if defined(_MSC_VER)
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+#endif
+
+    frame.captured_at = std::chrono::steady_clock::now();
+    return true;
+}
 // the returned activate (Release()) and all other activates in the
 // returned array are released here. Returns nullptr on failure.
 IMFActivate* find_device_activate(const std::string& device_id) {
@@ -449,25 +494,17 @@ void WebcamCapture::run_capture_worker(std::string device_id,
                 const int W = (int)best_w;
                 const int H = (int)best_h;
                 WebcamFrame frame;
-                frame.width  = W;
-                frame.height = H;
-                frame.rgba.resize(size_t(W) * size_t(H) * 4);
-
-                for (int y = 0; y < H; ++y) {
-                    const int src_y = bottom_up ? (H - 1 - y) : y;
-                    const uint8_t* sr = data + (size_t)src_y * (size_t)row_pitch;
-                    uint8_t*       dr = frame.rgba.data() + (size_t)y * (size_t)W * 4;
-                    // MFVideoFormat_RGB32 byte order: B, G, R, X.
-                    for (int x = 0; x < W; ++x) {
-                        dr[x * 4 + 0] = sr[x * 4 + 2]; // R
-                        dr[x * 4 + 1] = sr[x * 4 + 1]; // G
-                        dr[x * 4 + 2] = sr[x * 4 + 0]; // B
-                        dr[x * 4 + 3] = 0xFF;
-                    }
-                }
-                frame.captured_at = std::chrono::steady_clock::now();
-
+                const bool copied = copy_rgb32_frame(data, cur_len, W, H,
+                                                     row_pitch, bottom_up,
+                                                     frame);
                 buf->Unlock();
+
+                if (!copied) {
+                    set_error("Webcam delivered an invalid frame buffer; stopping capture.");
+                    buf->Release();
+                    sample->Release();
+                    break;
+                }
 
                 std::lock_guard<std::mutex> lk(latest_mutex_);
                 latest_       = std::move(frame);

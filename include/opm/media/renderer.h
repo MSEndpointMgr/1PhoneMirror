@@ -497,6 +497,10 @@ private:
     // Settings::set_webcam_pending() so a crash inside the capture stack
     // disables the auto-open path on the next launch.
     bool webcam_pending_cleared_  = true;
+    // Set when a previous launch died during webcam startup. While true,
+    // opening the drawer shows the picker but does not auto-start the
+    // default camera again until the user explicitly chooses one.
+    bool webcam_requires_manual_pick_ = false;
     bool webcam_drawer_visible_   = false;
     bool webcam_drawer_animating_ = false;
     float webcam_drawer_anim_     = 0.0f; // 0=hidden, 1=fully visible

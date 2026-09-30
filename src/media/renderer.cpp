@@ -23,8 +23,10 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <commctrl.h>
 #include <shlobj.h>
 #include <shellapi.h>
+#pragma comment(lib, "comctl32.lib")
 #endif
 
 extern "C" {
@@ -145,6 +147,45 @@ static bool open_in_snagit(const std::string& file_path) {
 #else
 static inline std::string find_snagit_editor() { return {}; }
 static inline bool open_in_snagit(const std::string&) { return false; }
+#endif
+
+#ifdef _WIN32
+static constexpr UINT_PTR kRendererWindowSubclassId = 1;
+
+static LRESULT CALLBACK renderer_window_subclass_proc(HWND hwnd, UINT msg,
+                                                      WPARAM wparam, LPARAM lparam,
+                                                      UINT_PTR subclass_id,
+                                                      DWORD_PTR ref_data) {
+    if (msg == WM_MOUSEACTIVATE) {
+        // Borderless SDL windows on Windows can activate with the first
+        // click but still eat that click, which forces a second click for
+        // drag/close/bezel interactions. Return MA_ACTIVATE so the click
+        // that activated the window is also delivered to SDL.
+        return MA_ACTIVATE;
+    }
+    return DefSubclassProc(hwnd, msg, wparam, lparam);
+}
+
+static void install_renderer_window_subclass(SDL_Window* window) {
+    if (!window) return;
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (!SDL_GetWindowWMInfo(window, &info)) return;
+    SetWindowSubclass(info.info.win.window,
+                      renderer_window_subclass_proc,
+                      kRendererWindowSubclassId,
+                      0);
+}
+
+static void remove_renderer_window_subclass(SDL_Window* window) {
+    if (!window) return;
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (!SDL_GetWindowWMInfo(window, &info)) return;
+    RemoveWindowSubclass(info.info.win.window,
+                         renderer_window_subclass_proc,
+                         kRendererWindowSubclassId);
+}
 #endif
 
 // ---------------------------------------------------------------------------
@@ -653,6 +694,10 @@ Renderer::Renderer() = default;
 Renderer::~Renderer() { shutdown(); }
 
 bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
+    // Deliver the click that activates an unfocused window instead of
+    // forcing the user to click once to focus and again to interact.
+    SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
+
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         std::cerr << "[Renderer] SDL_Init failed: " << SDL_GetError() << "\n";
         return false;
@@ -668,6 +713,10 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         std::cerr << "[Renderer] Failed to create window: " << SDL_GetError() << "\n";
         return false;
     }
+
+#ifdef _WIN32
+    install_renderer_window_subclass(window_);
+#endif
 
     sdl_renderer_ = SDL_CreateRenderer(window_, -1,
         SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -704,6 +753,7 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
                          "disabling auto-open and clearing saved device.\n";
             settings_.webcam_drawer_open = false;
             settings_.webcam_device_id.clear();
+            webcam_requires_manual_pick_ = true;
             settings_.save();
             opm::Settings::clear_webcam_pending();
         } else {
@@ -940,6 +990,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
+        version_lines_.push_back(make_ver(L"30.09.2026 \u2013 0.6.1", 34, 200, 200, 255));
+        version_lines_.push_back(make_desc(L"Webcam crash guard + first-click bezel interactions on inactive window"));
+        version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"29.08.2026 \u2013 0.6.0", 34, 200, 200, 255));
         version_lines_.push_back(make_desc(L"Installer and app now digitally signed"));
         version_lines_.push_back({nullptr, 0, 0});
@@ -1098,7 +1151,12 @@ void Renderer::shutdown() {
     if (protected_overlay_tex_) { SDL_DestroyTexture(protected_overlay_tex_); protected_overlay_tex_ = nullptr; }
     if (texture_) { SDL_DestroyTexture(texture_); texture_ = nullptr; }
     if (sdl_renderer_) { SDL_DestroyRenderer(sdl_renderer_); sdl_renderer_ = nullptr; }
-    if (window_) { SDL_DestroyWindow(window_); window_ = nullptr; }
+    if (window_) {
+#ifdef _WIN32
+        remove_renderer_window_subclass(window_);
+#endif
+        SDL_DestroyWindow(window_); window_ = nullptr;
+    }
     SDL_Quit();
 }
 
@@ -1709,6 +1767,7 @@ void Renderer::run() {
                                     std::string new_id = clicked_action.substr(3);
                                     if (new_id != settings_.webcam_device_id) {
                                         settings_.webcam_device_id = new_id;
+                                        webcam_requires_manual_pick_ = false;
                                         settings_.save();
                                         bool was_running = webcam_.is_running();
                                         bool keep_open   = webcam_drawer_visible_;
@@ -1945,6 +2004,7 @@ void Renderer::run() {
                             if (r.w > 0 && in_rect(mx, my, r.x, r.y, r.w, r.h)) {
                                 if (dev_id != settings_.webcam_device_id) {
                                     settings_.webcam_device_id = dev_id;
+                                    webcam_requires_manual_pick_ = false;
                                     settings_.save();
                                     bool was_running = webcam_.is_running();
                                     bool keep_open   = webcam_drawer_visible_;
@@ -9378,6 +9438,9 @@ void Renderer::toggle_webcam_drawer() {
     settings_.save();
 #ifdef ENABLE_WEBCAM
     if (webcam_drawer_visible_) {
+        if (webcam_requires_manual_pick_) {
+            return;
+        }
         if (!webcam_.is_running()) {
             // Detached so we never block the UI thread while MF spins up.
             std::string dev = settings_.webcam_device_id;
@@ -9644,9 +9707,14 @@ void Renderer::draw_webcam_drawer() {
     } else {
         // Not running: render a faint status hint so the user knows
         // why the drawer is dark.
-        std::string msg = webcam_.last_error().empty()
-                              ? std::string("Right-click the bottom button to pick a camera")
-                              : ("Webcam error: " + webcam_.last_error());
+        std::string msg;
+        if (webcam_requires_manual_pick_) {
+            msg = "Webcam crashed previously. Pick another camera from the menu or side dots.";
+        } else {
+            msg = webcam_.last_error().empty()
+                      ? std::string("Right-click the bottom button to pick a camera")
+                      : ("Webcam error: " + webcam_.last_error());
+        }
         int eq_w = ui_ref_width();
         int font_h = std::max(11, eq_w / 44);
         int tw = 0, th = 0;

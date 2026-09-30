@@ -1,4 +1,16 @@
 [CmdletBinding()]
+<#
+.SYNOPSIS
+    Produces the signed MSI release artifact and its publish-time SHA-256.
+
+.DESCRIPTION
+    Wraps build and packaging so the final published MSI, its SHA-256, and the
+    release metadata are generated from the same exact artifact. Azure Trusted
+    Signing configuration must be supplied explicitly or via the
+    OPM_TRUSTED_SIGNING_* environment variables. Timestamp URLs are validated
+    and HTTP is allowed only for approved timestamp providers required by the
+    current signing toolchain.
+#>
 param(
     [string]$Version,
     [switch]$SkipBuild,
@@ -6,17 +18,55 @@ param(
     [switch]$SkipSign,
     [switch]$UseLocalCert,
     [string]$SignCertThumbprint,
-    [string]$SigningEndpoint = 'https://neu.codesigning.azure.net/',
-    [string]$SigningAccount  = 'ASA-1PhoneMirror',
-    [string]$SigningProfile  = 'PublicTrust1PhoneMirror',
-    [string]$SigningTenantId = '83472170-5be6-45bd-b4a7-464f4d12f820',
-    [string]$TimestampUrl = 'http://timestamp.acs.microsoft.com',
+    [string]$SigningEndpoint = $env:OPM_TRUSTED_SIGNING_ENDPOINT,
+    [string]$SigningAccount  = $env:OPM_TRUSTED_SIGNING_ACCOUNT,
+    [string]$SigningProfile  = $env:OPM_TRUSTED_SIGNING_PROFILE,
+    [string]$SigningTenantId = $env:OPM_TRUSTED_SIGNING_TENANT_ID,
+    [string]$TimestampUrl,
     [string]$WingetPackage = 'MSEndpointMgr.1PhoneMirror',
     [string]$ReleaseRepo = 'MSEndpointMgr/1PhoneMirror',
     [switch]$PrintOnly
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Assert-HttpsUrl {
+    param(
+        [Parameter(Mandatory)] [string] $Url,
+        [Parameter(Mandatory)] [string] $SettingName
+    )
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$uri)) {
+        throw "$SettingName must be an absolute URL. Got: $Url"
+    }
+    if ($uri.Scheme -ne 'https') {
+        throw "$SettingName must use HTTPS. Got: $Url"
+    }
+}
+
+function Assert-TimestampUrl {
+    param(
+        [Parameter(Mandatory)] [string] $Url
+    )
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$uri)) {
+        throw "TimestampUrl must be an absolute URL. Got: $Url"
+    }
+    if ($uri.Scheme -eq 'https') { return }
+    if ($uri.Scheme -ne 'http') {
+        throw "TimestampUrl must use HTTP or HTTPS. Got: $Url"
+    }
+
+    $approvedHosts = @(
+        'timestamp.acs.microsoft.com',
+        'timestamp.digicert.com'
+    )
+    if ($approvedHosts -notcontains $uri.Host) {
+        throw "HTTP TimestampUrl is only allowed for approved timestamp providers. Got: $Url"
+    }
+}
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $buildScript = Join-Path $root 'scripts\build.ps1'
@@ -44,6 +94,11 @@ $artifactName = "1PhoneMirror-$Version.msi"
 $artifactPath = Join-Path $distDir $artifactName
 $hashFilePath = "$artifactPath.sha256"
 $releaseJsonPath = Join-Path $distDir "1PhoneMirror-$Version.release.json"
+
+if (-not $PSBoundParameters.ContainsKey('TimestampUrl')) {
+    $TimestampUrl = if ($UseLocalCert) { 'http://timestamp.digicert.com' } else { 'http://timestamp.acs.microsoft.com' }
+}
+Assert-TimestampUrl -Url $TimestampUrl
 
 if (-not $SkipBuild -and -not $SkipPackage) {
     Write-Host "==> Building Release binary" -ForegroundColor Cyan

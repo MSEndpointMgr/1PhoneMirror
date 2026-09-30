@@ -24,8 +24,14 @@
     SHA-1 thumbprint of a code-signing cert in CurrentUser\My. When provided,
     both the EXE (in stage) and the resulting MSI are signed with signtool.
 
+.PARAMETER AzureSign
+    Uses Azure Trusted Signing. Requires SigningEndpoint, SigningAccount, and
+    SigningProfile to be passed explicitly or supplied via the
+    OPM_TRUSTED_SIGNING_* environment variables.
+
 .PARAMETER TimestampUrl
-    RFC 3161 timestamp URL used during signing.
+    RFC 3161 timestamp URL used during signing. HTTPS is preferred. HTTP is
+    allowed only for approved timestamp providers required by the signing toolchain.
 
 .PARAMETER IntuneWinAppUtil
     Optional path to IntuneWinAppUtil.exe. If found (or found on PATH), the
@@ -38,6 +44,13 @@
 .EXAMPLE
     .\package.ps1 -SignCertThumbprint ABCDEF1234... -IntuneWinAppUtil C:\Tools\IntuneWinAppUtil.exe
     Full pipeline including signing and Intune packaging.
+
+.EXAMPLE
+    $env:OPM_TRUSTED_SIGNING_ENDPOINT = 'https://example.codesigning.azure.net/'
+    $env:OPM_TRUSTED_SIGNING_ACCOUNT = 'MyAccount'
+    $env:OPM_TRUSTED_SIGNING_PROFILE = 'MyProfile'
+    .\package.ps1 -AzureSign
+    Full pipeline using Azure Trusted Signing with configuration from the environment.
 #>
 [CmdletBinding()]
 param(
@@ -45,11 +58,11 @@ param(
     [switch] $SkipBuild,
     [string] $SignCertThumbprint,
     [switch] $AzureSign,
-    [string] $SigningEndpoint = 'https://neu.codesigning.azure.net/',
-    [string] $SigningAccount  = 'ASA-1PhoneMirror',
-    [string] $SigningProfile  = 'PublicTrust1PhoneMirror',
-    [string] $SigningTenantId = '83472170-5be6-45bd-b4a7-464f4d12f820',
-    [string] $TimestampUrl = 'http://timestamp.digicert.com',
+    [string] $SigningEndpoint = $env:OPM_TRUSTED_SIGNING_ENDPOINT,
+    [string] $SigningAccount  = $env:OPM_TRUSTED_SIGNING_ACCOUNT,
+    [string] $SigningProfile  = $env:OPM_TRUSTED_SIGNING_PROFILE,
+    [string] $SigningTenantId = $env:OPM_TRUSTED_SIGNING_TENANT_ID,
+    [string] $TimestampUrl,
     [string] $IntuneWinAppUtil
 )
 
@@ -57,18 +70,72 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
+function Assert-HttpsUrl {
+    param(
+        [Parameter(Mandatory)] [string] $Url,
+        [Parameter(Mandatory)] [string] $SettingName
+    )
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$uri)) {
+        throw "$SettingName must be an absolute URL. Got: $Url"
+    }
+    if ($uri.Scheme -ne 'https') {
+        throw "$SettingName must use HTTPS. Got: $Url"
+    }
+}
+
+function Assert-TimestampUrl {
+    param(
+        [Parameter(Mandatory)] [string] $Url
+    )
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$uri)) {
+        throw "TimestampUrl must be an absolute URL. Got: $Url"
+    }
+    if ($uri.Scheme -eq 'https') { return }
+    if ($uri.Scheme -ne 'http') {
+        throw "TimestampUrl must use HTTP or HTTPS. Got: $Url"
+    }
+
+    $approvedHosts = @(
+        'timestamp.acs.microsoft.com',
+        'timestamp.digicert.com'
+    )
+    if ($approvedHosts -notcontains $uri.Host) {
+        throw "HTTP TimestampUrl is only allowed for approved timestamp providers. Got: $Url"
+    }
+}
+
+function Get-RequiredSetting {
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [string] $Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        throw "$Name is required. Pass -$Name or set the matching OPM_TRUSTED_SIGNING_* environment variable."
+    }
+    return $Value.Trim()
+}
+
 # ---------- Signing setup ----------
 # Two mutually exclusive modes:
 #   -AzureSign            : cloud key via Azure Trusted Signing (no local cert).
 #   -SignCertThumbprint   : legacy local cert in CurrentUser\My.
 $script:DoSign = $AzureSign.IsPresent -or [bool]$SignCertThumbprint
 $script:TsContext = $null
+if (-not $PSBoundParameters.ContainsKey('TimestampUrl')) {
+    $TimestampUrl = if ($AzureSign) { 'http://timestamp.acs.microsoft.com' } else { 'http://timestamp.digicert.com' }
+}
+Assert-TimestampUrl -Url $TimestampUrl
 if ($AzureSign) {
     . (Join-Path $root 'scripts\trusted-signing.ps1')
-    # Microsoft's timestamp service is the documented default for Trusted Signing.
-    if ($TimestampUrl -eq 'http://timestamp.digicert.com') {
-        $TimestampUrl = 'http://timestamp.acs.microsoft.com'
-    }
+    $SigningEndpoint = Get-RequiredSetting -Name 'SigningEndpoint' -Value $SigningEndpoint
+    $SigningAccount = Get-RequiredSetting -Name 'SigningAccount' -Value $SigningAccount
+    $SigningProfile = Get-RequiredSetting -Name 'SigningProfile' -Value $SigningProfile
+    Assert-HttpsUrl -Url $SigningEndpoint -SettingName 'SigningEndpoint'
     if ($SigningTenantId) { $env:AZURE_TENANT_ID = $SigningTenantId }
     Write-Host "==> Azure Trusted Signing: $SigningAccount / $SigningProfile" -ForegroundColor Cyan
     $script:TsContext = [ordered]@{
@@ -76,6 +143,9 @@ if ($AzureSign) {
         Dlib     = Get-TrustedSigningDlib
         Metadata = New-TrustedSigningMetadata -Endpoint $SigningEndpoint -AccountName $SigningAccount -ProfileName $SigningProfile
     }
+}
+elseif ($script:DoSign) {
+    $SignCertThumbprint = Get-RequiredSetting -Name 'SignCertThumbprint' -Value $SignCertThumbprint
 }
 
 # ---------- 1. Determine version ----------

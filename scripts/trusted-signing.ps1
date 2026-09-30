@@ -25,6 +25,46 @@ $script:TsVersion = '1.0.95'
 $script:TsPackageSha256 = '3BFCF1E0A3CB42AF1692F0A8ED45C15DE070C2DE86F28A59B2795D904D8A920F'
 $script:TsDlibSha256 = 'A359B420F676BC0223A379A84CA8369588AE7F265FD4F3E761E3425CBA376916'
 
+function Assert-HttpsUrl {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Url,
+        [Parameter(Mandatory)] [string] $SettingName
+    )
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$uri)) {
+        throw "$SettingName must be an absolute URL. Got: $Url"
+    }
+    if ($uri.Scheme -ne 'https') {
+        throw "$SettingName must use HTTPS. Got: $Url"
+    }
+}
+
+function Assert-TimestampUrl {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Url
+    )
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$uri)) {
+        throw "TimestampUrl must be an absolute URL. Got: $Url"
+    }
+    if ($uri.Scheme -eq 'https') { return }
+    if ($uri.Scheme -ne 'http') {
+        throw "TimestampUrl must use HTTP or HTTPS. Got: $Url"
+    }
+
+    $approvedHosts = @(
+        'timestamp.acs.microsoft.com',
+        'timestamp.digicert.com'
+    )
+    if ($approvedHosts -notcontains $uri.Host) {
+        throw "HTTP TimestampUrl is only allowed for approved timestamp providers. Got: $Url"
+    }
+}
+
 function Get-TrustedSigningDlib {
     [CmdletBinding()]
     param()
@@ -117,6 +157,7 @@ function Invoke-TrustedSign {
         [Parameter(Mandatory)] [string] $MetadataPath,
         [string] $TimestampUrl = 'http://timestamp.acs.microsoft.com'
     )
+    Assert-TimestampUrl -Url $TimestampUrl
     Write-Host "    signing $([IO.Path]::GetFileName($File))" -ForegroundColor DarkGray
     & $Signtool sign /v /fd SHA256 /tr $TimestampUrl /td SHA256 `
         /dlib $Dlib /dmdf $MetadataPath $File
