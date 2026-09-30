@@ -7,6 +7,7 @@
 #include <opm/media/decoder.h>
 #include <opm/network/rtsp_server.h>
 #include <opm/network/tcp_server.h>
+#include <array>
 #include <atomic>
 #include <functional>
 #include <map>
@@ -94,6 +95,15 @@ private:
     // Mirror data receiver (runs on mirror_port)
     void mirror_receive_loop();
 
+    // Audio stream (SETUP stream type 96) — UDP RTP carrying AAC-ELD.
+    struct MirrorSource;
+    bool start_audio_stream_locked(MirrorSource* src, uint64_t ct, uint64_t spf);
+    void audio_receive_loop(std::string source_ip, socket_t data_sock,
+                            socket_t control_sock,
+                            std::shared_ptr<media::Decoder> decoder,
+                            std::array<uint8_t, 16> key,
+                            std::array<uint8_t, 16> iv);
+
     // Event channel — separate TCP listener for reverse events
     bool start_event_listener();
     void event_accept_loop();
@@ -117,9 +127,17 @@ private:
         int number = 0;
         uint8_t aes_key[16] = {};
         bool has_aes_key = false;
+        uint8_t aes_iv[16] = {};
+        bool has_aes_iv = false;
         uint64_t stream_connection_id = 0;
         std::unique_ptr<MirrorBuffer> buffer;
         socket_t mirror_sock = INVALID_SOCK;
+        // Audio stream sockets. Closing them makes the detached audio thread
+        // fall out of its select() loop and exit.
+        socket_t audio_sock = INVALID_SOCK;
+        socket_t audio_control_sock = INVALID_SOCK;
+        uint16_t audio_port = 0;
+        uint16_t audio_control_port = 0;
         // Set true when the iOS client signals video stream pause via the
         // SPS/PPS packet flag (0x56 / 0x5e). Cleared as soon as fresh video
         // data resumes. Surfaced to the UI via SourceInfo::paused.
@@ -159,6 +177,9 @@ private:
     // and crash with an access violation.
     std::atomic<bool> stopped_{false};
     std::thread mirror_thread_;
+    // Detached audio threads outlive SETUP; stop() waits for this to drain
+    // before freeing state they still touch.
+    std::atomic<int> audio_threads_{0};
 
     // Event listener
     socket_t event_sock_ = INVALID_SOCK;

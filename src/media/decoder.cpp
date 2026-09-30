@@ -4,7 +4,9 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavutil/channel_layout.h>
 #include <libavutil/imgutils.h>
+#include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
 
@@ -47,6 +49,7 @@ Decoder::~Decoder() {
     if (video_ctx_) avcodec_free_context(&video_ctx_);
     if (audio_ctx_) avcodec_free_context(&audio_ctx_);
     if (sws_ctx_) sws_freeContext(sws_ctx_);
+    if (swr_ctx_) swr_free(&swr_ctx_);
 }
 
 bool Decoder::init_video(int codec_id) {
@@ -76,7 +79,8 @@ bool Decoder::init_video(int codec_id) {
     return true;
 }
 
-bool Decoder::init_audio(int codec_id, int sample_rate, int channels) {
+bool Decoder::init_audio(int codec_id, int sample_rate, int channels,
+                         const uint8_t* extradata, int extradata_size) {
     const AVCodec* codec = avcodec_find_decoder(static_cast<AVCodecID>(codec_id));
     if (!codec) {
         std::cerr << "[Decoder] Audio codec not found: " << codec_id << "\n";
@@ -90,8 +94,19 @@ bool Decoder::init_audio(int codec_id, int sample_rate, int channels) {
     }
 
     audio_ctx_->sample_rate = sample_rate;
-    audio_ctx_->ch_layout.nb_channels = channels;
+    av_channel_layout_default(&audio_ctx_->ch_layout, channels);
     audio_ctx_->thread_count = 2;
+
+    if (extradata && extradata_size > 0) {
+        audio_ctx_->extradata = static_cast<uint8_t*>(
+            av_mallocz(extradata_size + AV_INPUT_BUFFER_PADDING_SIZE));
+        if (!audio_ctx_->extradata) {
+            avcodec_free_context(&audio_ctx_);
+            return false;
+        }
+        std::memcpy(audio_ctx_->extradata, extradata, extradata_size);
+        audio_ctx_->extradata_size = extradata_size;
+    }
 
     if (avcodec_open2(audio_ctx_, codec, nullptr) < 0) {
         std::cerr << "[Decoder] Failed to open audio codec\n";
@@ -189,31 +204,47 @@ bool Decoder::decode_audio_frame(AVPacket* pkt) {
 
     AVFrame* frame = av_frame_alloc();
     while (avcodec_receive_frame(audio_ctx_, frame) == 0) {
-        // Output interleaved S16 PCM
-        int data_size = frame->nb_samples * frame->ch_layout.nb_channels * 2; // 16-bit
-        AudioFrame af;
-        af.data = std::make_unique<uint8_t[]>(data_size);
-        af.size = data_size;
-        af.sample_rate = frame->sample_rate;
-        af.channels = frame->ch_layout.nb_channels;
-        af.pts = frame->pts;
+        const int channels = frame->ch_layout.nb_channels;
 
-        // For planar formats, interleave; for packed, just copy
-        if (av_sample_fmt_is_planar(static_cast<AVSampleFormat>(frame->format))) {
-            // Simple interleave for S16P -> S16
-            int16_t* dst = reinterpret_cast<int16_t*>(af.data.get());
-            for (int s = 0; s < frame->nb_samples; s++) {
-                for (int ch = 0; ch < af.channels; ch++) {
-                    const int16_t* src = reinterpret_cast<const int16_t*>(frame->data[ch]);
-                    dst[s * af.channels + ch] = src[s];
-                }
+        // (Re)build the resampler whenever the decoder's output format changes.
+        if (!swr_ctx_ || swr_src_fmt_ != frame->format ||
+            swr_src_rate_ != frame->sample_rate || swr_src_channels_ != channels) {
+            if (swr_ctx_) swr_free(&swr_ctx_);
+            AVChannelLayout out_layout;
+            av_channel_layout_default(&out_layout, channels);
+            if (swr_alloc_set_opts2(&swr_ctx_,
+                                    &out_layout, AV_SAMPLE_FMT_S16, frame->sample_rate,
+                                    &frame->ch_layout,
+                                    static_cast<AVSampleFormat>(frame->format),
+                                    frame->sample_rate,
+                                    0, nullptr) < 0 ||
+                swr_init(swr_ctx_) < 0) {
+                std::cerr << "[Decoder] Failed to init audio resampler\n";
+                if (swr_ctx_) swr_free(&swr_ctx_);
+                av_channel_layout_uninit(&out_layout);
+                av_frame_unref(frame);
+                continue;
             }
-        } else {
-            std::memcpy(af.data.get(), frame->data[0], data_size);
+            av_channel_layout_uninit(&out_layout);
+            swr_src_fmt_ = frame->format;
+            swr_src_rate_ = frame->sample_rate;
+            swr_src_channels_ = channels;
         }
 
-        if (on_audio_frame_) {
-            on_audio_frame_(std::move(af));
+        AudioFrame af;
+        af.sample_rate = frame->sample_rate;
+        af.channels = channels;
+        af.pts = frame->pts;
+        af.data = std::make_unique<uint8_t[]>(
+            static_cast<size_t>(frame->nb_samples) * channels * 2);
+
+        uint8_t* out[1] = { af.data.get() };
+        int converted = swr_convert(swr_ctx_, out, frame->nb_samples,
+                                    const_cast<const uint8_t**>(frame->extended_data),
+                                    frame->nb_samples);
+        if (converted > 0) {
+            af.size = converted * channels * 2;
+            if (on_audio_frame_) on_audio_frame_(std::move(af));
         }
 
         av_frame_unref(frame);

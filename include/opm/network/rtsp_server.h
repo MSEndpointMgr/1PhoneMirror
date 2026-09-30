@@ -27,6 +27,7 @@ struct RtspResponse {
     std::string reason = "OK";
     std::map<std::string, std::string> headers;
     std::vector<uint8_t> body;
+    bool keep_connection = false;
 };
 
 using RtspHandler = std::function<RtspResponse(const RtspRequest& req)>;

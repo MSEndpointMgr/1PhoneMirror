@@ -222,6 +222,12 @@ bool BPlistReader::get_streams(std::vector<StreamInfo>& out) const {
                     info.type = read_uint_object(d.val_refs[j]);
                 else if (k == "streamConnectionID")
                     info.stream_connection_id = read_uint_object(d.val_refs[j]);
+                else if (k == "ct")
+                    info.ct = read_uint_object(d.val_refs[j]);
+                else if (k == "spf")
+                    info.spf = read_uint_object(d.val_refs[j]);
+                else if (k == "audioFormat")
+                    info.audio_format = read_uint_object(d.val_refs[j]);
             }
             out.push_back(info);
         }

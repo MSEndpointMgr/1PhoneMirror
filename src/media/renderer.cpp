@@ -945,7 +945,8 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         info_lines_.push_back(make_info(L"AirPlay (iOS) \u00B7 scrcpy (Android)", 34, 160, 160, 160));
         info_lines_.push_back({nullptr, 0, 0}); // spacer
         info_lines_.push_back(make_info(L"(F) Fullscreen \u00B7 (M) Menu \u00B7 (L) Log \u00B7 (A) Add Android", 30, 130, 130, 130));
-        info_lines_.push_back(make_info(L"(I) Info \u00B7 (V) Version \u00B7 (S) Settings \u00B7 (W) Webcam \u00B7 (Esc) Quit", 30, 130, 130, 130));
+        info_lines_.push_back(make_info(L"(I) Info \u00B7 (V) Version \u00B7 (S) Settings", 30, 130, 130, 130));
+        info_lines_.push_back(make_info(L"(W) Webcam \u00B7 (U) Mute audio \u00B7 (Esc) Quit", 30, 130, 130, 130));
         info_lines_.push_back(make_info(L"(Ctrl+S) Screenshot \u00B7 (Ctrl+Shift+S) Annotate", 30, 130, 130, 130));
 #ifdef _WIN32
         info_lines_.push_back(make_info(L"(Ctrl+Shift+T) OCR copy text from a region", 30, 130, 130, 130));
@@ -990,6 +991,9 @@ bool Renderer::init(const std::string& title, int /*width*/, int /*height*/) {
         };
         version_lines_.push_back(make_ver(L"Version History", 40, 255, 255, 255));
         version_lines_.push_back({nullptr, 0, 0}); // spacer
+        version_lines_.push_back(make_ver(L"30.09.2026 \u2013 0.6.2 (pre-release)", 34, 200, 200, 255));
+        version_lines_.push_back(make_desc(L"AirPlay audio receiver, mute control, pause-safe mirroring"));
+        version_lines_.push_back({nullptr, 0, 0});
         version_lines_.push_back(make_ver(L"30.09.2026 \u2013 0.6.1", 34, 200, 200, 255));
         version_lines_.push_back(make_desc(L"Webcam crash guard + first-click bezel interactions on inactive window"));
         version_lines_.push_back({nullptr, 0, 0});
@@ -1324,6 +1328,11 @@ void Renderer::run() {
                 }
                 if (event.key.keysym.sym == SDLK_w) {
                     toggle_webcam_drawer();
+                }
+                if (event.key.keysym.sym == SDLK_u &&
+                    !(event.key.keysym.mod & (KMOD_CTRL | KMOD_SHIFT | KMOD_ALT))) {
+                    audio_muted_ = !audio_muted_;
+                    if (audio_mute_fn_) audio_mute_fn_(audio_muted_);
                 }
                 if (event.key.keysym.sym == SDLK_m) {
                     island_visible_ = !island_visible_;
@@ -1937,6 +1946,14 @@ void Renderer::run() {
                         record_toggle_requested_ = true;
                         btn_flash_ = true;
                         btn_flash_start_ = std::chrono::steady_clock::now();
+                        break;
+                    }
+
+                    if (mute_btn_.w > 0 &&
+                        in_rect(mx, my, mute_btn_.x, mute_btn_.y,
+                                mute_btn_.w, mute_btn_.h)) {
+                        audio_muted_ = !audio_muted_;
+                        if (audio_mute_fn_) audio_mute_fn_(audio_muted_);
                         break;
                     }
 
@@ -2700,6 +2717,7 @@ void Renderer::render_frame() {
         SDL_RenderCopy(sdl_renderer_, texture_, nullptr, &dst);
         close_btn_ = screenshot_btn_ = folder_btn_ = icon_btn_ = {};
         record_btn_ = {};
+        mute_btn_ = {};
         resize_grip_ = {};
         frame_dst_w_ = 0;
         SDL_RenderPresent(sdl_renderer_);
@@ -3068,8 +3086,67 @@ void Renderer::render_frame() {
     // Island bar (behind frame — slides behind bezel)
     if (island_anim_ > 0.01f) draw_island();
 
+    std::string bezel_hover_key;
+    std::string bezel_hover_text;
+    int bezel_hover_ax = 0, bezel_hover_ay = 0;
+
     // Phone frame overlay (on top — covers island and panel edges)
     phone_frame_.render(sdl_renderer_, frame_dst_x_, frame_dst_y_, frame_dst_w_, frame_dst_h_);
+
+    // Mute control in the left barrel, aligned with the upper volume button.
+    mute_btn_ = {};
+    if (!phone_frame_.is_tablet()) {
+        float frame_scale = (float)frame_dst_w_ / std::max(1, phone_frame_.frame_width());
+        int screen_h = phone_frame_.screen_height();
+        int bezel_top = phone_frame_.bezel_top_size();
+        int action_h = std::max(8, (int)(screen_h * 0.030f));
+        int volume_h = std::max(21, (int)(screen_h * 0.0675f));
+        int action_y = bezel_top + (int)(screen_h * 0.17f);
+        int volume_up_y = action_y + action_h + std::max(6, volume_h / 3);
+        int center_x = frame_dst_x_ + (int)(phone_frame_.bezel_left() * frame_scale * 0.5f);
+        int center_y = frame_dst_y_ + (int)((volume_up_y + volume_h / 2) * frame_scale);
+        int bezel_px = std::max(4, (int)(phone_frame_.bezel_left() * frame_scale));
+        int hit_size = std::max(16, (int)(bezel_px * 1.5f));
+        mute_btn_ = {center_x - hit_size / 2, center_y - hit_size / 2, hit_size, hit_size};
+
+        int mx, my;
+        SDL_GetMouseState(&mx, &my);
+        bool hovered = in_rect(mx, my, mute_btn_.x, mute_btn_.y,
+                               mute_btn_.w, mute_btn_.h);
+        int radius = std::max(4, bezel_px / 2);
+        SDL_SetRenderDrawBlendMode(sdl_renderer_, SDL_BLENDMODE_BLEND);
+        uint8_t bg = hovered ? 90 : 55;
+        SDL_SetRenderDrawColor(sdl_renderer_, bg, bg, bg, hovered ? 220 : 160);
+        fill_circle(sdl_renderer_, center_x, center_y, radius);
+
+        SDL_SetRenderDrawColor(sdl_renderer_, 245, 245, 245, hovered ? 255 : 220);
+        int glyph = std::max(3, radius / 2);
+        SDL_Rect speaker{center_x - glyph, center_y - glyph / 2,
+                         std::max(2, glyph / 2), glyph};
+        SDL_RenderFillRect(sdl_renderer_, &speaker);
+        SDL_RenderDrawLine(sdl_renderer_, center_x - glyph / 2, center_y - glyph / 2,
+                           center_x + glyph / 2, center_y - glyph);
+        SDL_RenderDrawLine(sdl_renderer_, center_x - glyph / 2, center_y + glyph / 2,
+                           center_x + glyph / 2, center_y + glyph);
+        if (audio_muted_) {
+            SDL_SetRenderDrawColor(sdl_renderer_, 255, 110, 110, 245);
+            SDL_RenderDrawLine(sdl_renderer_, center_x - glyph, center_y - glyph,
+                               center_x + glyph, center_y + glyph);
+        } else {
+            SDL_RenderDrawLine(sdl_renderer_, center_x + glyph, center_y - glyph / 2,
+                               center_x + glyph + 2, center_y - glyph / 4);
+            SDL_RenderDrawLine(sdl_renderer_, center_x + glyph + 2, center_y - glyph / 4,
+                               center_x + glyph + 2, center_y + glyph / 4);
+            SDL_RenderDrawLine(sdl_renderer_, center_x + glyph + 2, center_y + glyph / 4,
+                               center_x + glyph, center_y + glyph / 2);
+        }
+        if (hovered) {
+            bezel_hover_key = "mute";
+            bezel_hover_text = audio_muted_ ? "Unmute audio (U)" : "Mute audio (U)";
+            bezel_hover_ax = center_x;
+            bezel_hover_ay = center_y - radius - 4;
+        }
+    }
 
     // Recording HUD — countdown digit while waiting, "REC + elapsed" chip
     // while recording. Drawn on the screen content (under phone bezel) but
@@ -3158,13 +3235,6 @@ void Renderer::render_frame() {
 
     // Webcam drawer (slides down out of the bottom bezel)
     if (webcam_drawer_anim_ > 0.01f) draw_webcam_drawer();
-
-    // Menu star — center top bezel of frame
-    // Track which bezel UI element (if any) the cursor is currently over,
-    // so we can emit a single delayed tooltip after all dots are drawn.
-    std::string bezel_hover_key;
-    std::string bezel_hover_text;
-    int bezel_hover_ax = 0, bezel_hover_ay = 0;
 
     // Menu star — center top bezel
     {

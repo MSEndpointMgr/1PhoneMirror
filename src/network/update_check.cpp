@@ -55,7 +55,8 @@ static bool is_newer(const SemVer& a, const SemVer& b) {
 
 // Naive JSON string-field extractor: finds `"key":"value"` and returns the
 // value with basic backslash-escape handling. Sufficient for GitHub's
-// release JSON where we only need tag_name and html_url.
+// release JSON where we only need tag_name and html_url. For a releases array,
+// this returns the fields from its first (newest) release object.
 static std::string extract_string_field(const std::string& json,
                                         const std::string& key) {
     std::string needle = "\"" + key + "\"";
@@ -187,7 +188,9 @@ UpdateCheckResult check_for_update(const std::string& current_version) {
     std::string err;
     std::string body = https_get(
         L"api.github.com",
-        L"/repos/MSEndpointMgr/1PhoneMirror/releases/latest",
+        // Winget currently points at v0.6.1, which is published on GitHub as
+        // a prerelease. The /latest endpoint intentionally excludes it.
+        L"/repos/MSEndpointMgr/1PhoneMirror/releases?per_page=1",
         L"1PhoneMirror-UpdateCheck/1.0",
         &status, &err);
 

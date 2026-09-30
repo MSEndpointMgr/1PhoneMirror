@@ -129,6 +129,7 @@ button on the menu (or use the Windows file dialog) to open it.
 | `I` | Toggle info panel |
 | `V` | Toggle version history |
 | `W` | Toggle webcam drawer (slides down from the phone bottom) |
+| `U` | Mute / unmute audio output |
 | `S` | Toggle settings panel (bezel colour, screenshots, recording format) |
 | `Ctrl+S` | Screenshot — save to Pictures folder and/or clipboard (per Settings) |
 | `Ctrl+Shift+S` | Screenshot with annotation tools |
@@ -144,6 +145,7 @@ button on the menu (or use the Windows file dialog) to open it.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **0.6.2 (pre-release)** | 30.09.2026 | AirPlay audio receiver with mute/unmute control and pause-safe mirroring. Pending validation before the Winget submission. |
 | **0.6.1** | 30.09.2026 | Webcam startup now **fails safe**: invalid camera buffers stop capture with an error instead of crashing the app, and a failed webcam launch no longer traps the app into auto-reopening the same bad camera on next start. The first click on an inactive window now works for bezel interactions such as drag and close. |
 | **0.6.0** | 29.08.2026 | The installer and application are now **digitally signed** with Azure Trusted Signing (Public Trust), so Windows SmartScreen and Defender recognise 1PhoneMirror as coming from a verified publisher instead of an unknown one. Every bundled executable and DLL is signed and timestamped. |
 | **0.5.2** | 27.08.2026 | New **Statistics** drawer (`T`) — anonymous iOS/Android session, screenshot, annotation, OCR and recording counts, plus a scrollable event log and one-click CSV export. Screenshots can now be **resized to an exact height in cm** (with a print-quality DPI tag so they stay sharp when pasted into Word/PowerPoint). |

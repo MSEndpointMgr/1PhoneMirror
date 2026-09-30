@@ -121,6 +121,9 @@ bool App::init(const Config& config) {
     auto on_audio = [this](media::AudioFrame frame) {
         audio_.submit(std::move(frame));
     };
+    renderer_.set_audio_mute_callback([this](bool muted) {
+        audio_.set_muted(muted);
+    });
 
 #ifdef ENABLE_AIRPLAY
     if (config_.enable_airplay) {

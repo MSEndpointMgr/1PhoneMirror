@@ -67,6 +67,9 @@ public:
     using ActivePlatformFn = std::function<std::string()>;
     void set_active_platform_provider(ActivePlatformFn fn) { active_platform_fn_ = std::move(fn); }
 
+    using AudioMuteFn = std::function<void(bool)>;
+    void set_audio_mute_callback(AudioMuteFn fn) { audio_mute_fn_ = std::move(fn); }
+
     // Triggered by the user pressing 'A' on the idle screen — App pops up a
     // pair/connect dialog and starts the Android receiver.
     using AddAndroidFn = std::function<void()>;
@@ -201,6 +204,7 @@ private:
     // pattern as bezel_screenshot_btn_.
     BtnRect record_btn_;
     BtnRect bezel_record_btn_;
+    BtnRect mute_btn_;
     int hover_btn_ = -1; // -1=none, 0=close, 1=screenshot, 2=folder, 3=icon, 4=info, 5=menu, 6=settings
 
     // Island visibility & animation
@@ -219,6 +223,8 @@ private:
     GetSourcesFn get_sources_fn_;
     SetActiveFn set_active_source_fn_;
     ActivePlatformFn active_platform_fn_;
+    AudioMuteFn audio_mute_fn_;
+    bool audio_muted_ = false;
     DisconnectFn disconnect_source_fn_;
     AddAndroidFn add_android_fn_;
     std::vector<std::pair<std::string, BtnRect>> source_btns_;    // Right-click popup menu over any bezel button.

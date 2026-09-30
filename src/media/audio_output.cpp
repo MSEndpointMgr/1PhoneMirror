@@ -47,16 +47,34 @@ void AudioOutput::shutdown() {
         SDL_CloseAudioDevice(device_id_);
         device_id_ = 0;
     }
+    std::lock_guard lock(queue_mutex_);
+    while (!queue_.empty()) queue_.pop();
+    read_offset_ = 0;
+    queued_bytes_ = 0;
+    primed_ = false;
     initialized_.store(false);
 }
 
 void AudioOutput::submit(AudioFrame frame) {
     std::lock_guard lock(queue_mutex_);
+    queued_bytes_ += static_cast<size_t>(frame.size);
     queue_.push(std::move(frame));
 
     // Prevent unbounded growth
     while (queue_.size() > 100) {
+        queued_bytes_ -= static_cast<size_t>(queue_.front().size);
         queue_.pop();
+    }
+}
+
+void AudioOutput::set_muted(bool muted) {
+    muted_.store(muted);
+    if (muted) {
+        std::lock_guard lock(queue_mutex_);
+        while (!queue_.empty()) queue_.pop();
+        read_offset_ = 0;
+        queued_bytes_ = 0;
+        primed_ = false;
     }
 }
 
@@ -74,6 +92,19 @@ void AudioOutput::audio_callback(void* userdata, uint8_t* stream, int len) {
 
     std::lock_guard lock(self->queue_mutex_);
 
+    if (self->muted_.load()) {
+        std::memset(stream, 0, len);
+        return;
+    }
+
+    // Hold a short cushion before starting, and rebuild it after an underrun.
+    // This prevents normal Wi-Fi packet jitter from becoming audible clicks.
+    if (!self->primed_ && self->queued_bytes_ < 16000) {
+        std::memset(stream, 0, len);
+        return;
+    }
+    self->primed_ = true;
+
     while (written < len && !self->queue_.empty()) {
         auto& front = self->queue_.front();
         int available = front.size - self->read_offset_;
@@ -82,6 +113,7 @@ void AudioOutput::audio_callback(void* userdata, uint8_t* stream, int len) {
         std::memcpy(stream + written, front.data.get() + self->read_offset_, to_copy);
         written += to_copy;
         self->read_offset_ += to_copy;
+        self->queued_bytes_ -= static_cast<size_t>(to_copy);
 
         if (self->read_offset_ >= front.size) {
             self->queue_.pop();
@@ -92,6 +124,7 @@ void AudioOutput::audio_callback(void* userdata, uint8_t* stream, int len) {
     // Fill remaining with silence
     if (written < len) {
         std::memset(stream + written, 0, len - written);
+        self->primed_ = false;
     }
 }
 

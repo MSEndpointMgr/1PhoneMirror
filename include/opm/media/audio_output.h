@@ -20,6 +20,8 @@ public:
     // Queue decoded audio for playback (thread-safe)
     void submit(AudioFrame frame);
 
+    void set_muted(bool muted);
+    bool muted() const { return muted_.load(); }
     void pause();
     void resume();
 
@@ -31,6 +33,9 @@ private:
     std::queue<AudioFrame> queue_;
 
     int read_offset_ = 0; // offset into current frame being read
+    size_t queued_bytes_ = 0;
+    bool primed_ = false;
+    std::atomic<bool> muted_{false};
     std::atomic<bool> initialized_{false};
 };
 

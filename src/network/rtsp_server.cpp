@@ -62,7 +62,7 @@ void RtspServer::handle_client(socket_t client, const std::string& addr) {
 
         send_response(client, req, resp);
 
-        if (req.method == "TEARDOWN") {
+        if (req.method == "TEARDOWN" && !resp.keep_connection) {
             break;
         }
     }

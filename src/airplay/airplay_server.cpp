@@ -4,9 +4,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <deque>
 #include <iostream>
 #include <iomanip>
 #include <random>
+#include <set>
 #include <sstream>
 #include <cinttypes>
 #include <openssl/evp.h>
@@ -306,6 +308,9 @@ void AirPlayServer::stop() {
     }
     if (timing_thread_.joinable()) {
         timing_thread_.join();
+    }
+    for (int i = 0; i < 100 && audio_threads_.load() > 0; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     decoder_.flush();
     std::cout << "[AirPlay] Server stopped\n";
@@ -786,6 +791,15 @@ network::RtspResponse AirPlayServer::handle_setup(const network::RtspRequest& re
         uint64_t timing_rport = 0;
         reader.get_uint("timingPort", timing_rport);
 
+        // The audio stream is AES-128-CBC with this IV; the video stream
+        // derives its own CTR IV from streamConnectionID instead.
+        if (eiv.size() == 16) {
+            std::lock_guard lock(sources_mutex_);
+            MirrorSource* src = get_or_create_source_locked(source_ip);
+            memcpy(src->aes_iv, eiv.data(), 16);
+            src->has_aes_iv = true;
+        }
+
         // Try to decrypt the AES stream key via FairPlay
         if (ekey.size() == 72) {
             uint8_t key_buf[16] = {};
@@ -834,6 +848,8 @@ network::RtspResponse AirPlayServer::handle_setup(const network::RtspRequest& re
             std::cout << "[AirPlay] SETUP stream type=" << s.type;
             if (s.stream_connection_id)
                 std::cout << " connID=" << s.stream_connection_id;
+            if (s.type == 96)
+                std::cout << " ct=" << s.ct << " spf=" << s.spf;
             std::cout << "\n";
 
             if (s.type == 110) {
@@ -853,11 +869,20 @@ network::RtspResponse AirPlayServer::handle_setup(const network::RtspRequest& re
                 auto d = writer.add_dict({{k_dp, v_dp}, {k_ty, v_ty}});
                 stream_dicts.push_back(d);
             } else if (s.type == 96) {
-                // Audio stream (stub — return port 0 for now)
+                // Mirroring audio — AAC-ELD over UDP/RTP.
+                uint16_t data_port = 0, ctrl_port = 0;
+                {
+                    std::lock_guard lock(sources_mutex_);
+                    MirrorSource* src = get_or_create_source_locked(source_ip);
+                    if (start_audio_stream_locked(src, s.ct, s.spf)) {
+                        data_port = src->audio_port;
+                        ctrl_port = src->audio_control_port;
+                    }
+                }
                 auto k_dp = writer.add_string("dataPort");
-                auto v_dp = writer.add_uint(0);
+                auto v_dp = writer.add_uint(data_port);
                 auto k_cp = writer.add_string("controlPort");
-                auto v_cp = writer.add_uint(0);
+                auto v_cp = writer.add_uint(ctrl_port);
                 auto k_ty = writer.add_string("type");
                 auto v_ty = writer.add_uint(96);
                 auto d = writer.add_dict({{k_dp, v_dp}, {k_cp, v_cp}, {k_ty, v_ty}});
@@ -915,6 +940,34 @@ network::RtspResponse AirPlayServer::handle_set_parameter(const network::RtspReq
 network::RtspResponse AirPlayServer::handle_teardown(const network::RtspRequest& req) {
     network::RtspResponse resp;
     resp.status_code = 200;
+
+    BPlistReader reader;
+    std::vector<BPlistReader::StreamInfo> streams;
+    bool audio_teardown = false;
+    bool video_teardown = false;
+    if (!req.body.empty() && reader.parse(req.body.data(), req.body.size()) &&
+        reader.get_streams(streams)) {
+        for (const auto& stream : streams) {
+            audio_teardown |= stream.type == 96;
+            video_teardown |= stream.type == 110;
+        }
+    }
+
+    if (audio_teardown && !video_teardown) {
+        std::string source_ip = ip_from_addr(req.client_addr);
+        std::lock_guard lock(sources_mutex_);
+        auto it = sources_.find(source_ip);
+        if (it != sources_.end()) {
+            it->second->audio_sock = INVALID_SOCK;
+            it->second->audio_control_sock = INVALID_SOCK;
+            it->second->audio_port = 0;
+            it->second->audio_control_port = 0;
+        }
+        std::cout << "[AirPlay] TEARDOWN — audio stream ended; mirroring remains active\n";
+        resp.keep_connection = true;
+        return resp;
+    }
+
     std::cout << "[AirPlay] TEARDOWN — session ended\n";
     if (on_disconnect_) on_disconnect_();
     return resp;
@@ -1099,7 +1152,274 @@ void AirPlayServer::timing_loop() {
     }
 }
 
+// --- Audio Stream (SETUP stream type 96) ---
+
+namespace {
+
+// Minimal MSB-first bit writer for building an AudioSpecificConfig.
+struct BitWriter {
+    std::vector<uint8_t> buf;
+    int bitpos = 0;
+    void put(uint32_t value, int bits) {
+        for (int i = bits - 1; i >= 0; i--) {
+            if (bitpos % 8 == 0) buf.push_back(0);
+            if ((value >> i) & 1u)
+                buf.back() |= static_cast<uint8_t>(1 << (7 - (bitpos % 8)));
+            bitpos++;
+        }
+    }
+};
+
+// AirPlay sends bare AAC frames with no ADTS header, so FFmpeg needs the
+// AudioSpecificConfig up front to learn the object type and frame length.
+std::vector<uint8_t> build_audio_specific_config(int aot, int sample_rate,
+                                                 int channels,
+                                                 bool eld_short_frame) {
+    static const int kRates[] = {96000, 88200, 64000, 48000, 44100, 32000,
+                                 24000, 22050, 16000, 12000, 11025, 8000, 7350};
+    int sfi = 15;
+    for (int i = 0; i < 13; i++) {
+        if (kRates[i] == sample_rate) { sfi = i; break; }
+    }
+
+    BitWriter bw;
+    if (aot < 31) {
+        bw.put(aot, 5);
+    } else {
+        bw.put(31, 5);
+        bw.put(aot - 32, 6);
+    }
+    bw.put(sfi, 4);
+    if (sfi == 15) bw.put(sample_rate, 24);
+    bw.put(channels, 4);
+
+    if (aot == 39) { // ER AAC ELD
+        bw.put(eld_short_frame ? 1 : 0, 1); // frameLengthFlag: 1 => 480 samples
+        bw.put(0, 3);                       // the three resilience flags
+        bw.put(0, 1);                       // ldSbrPresentFlag
+        bw.put(0, 4);                       // ELDEXT_DONE
+    } else {
+        bw.put(0, 1); // frameLengthFlag (1024 samples)
+        bw.put(0, 1); // dependsOnCoreCoder
+        bw.put(0, 1); // extensionFlag
+    }
+    return bw.buf;
+}
+
+socket_t bind_udp_ephemeral(uint16_t& out_port) {
+    socket_t s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == INVALID_SOCK) return INVALID_SOCK;
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = 0;
+    if (bind(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        closesocket(s);
+        return INVALID_SOCK;
+    }
+
+    sockaddr_in bound{};
+    int len = sizeof(bound);
+    getsockname(s, reinterpret_cast<sockaddr*>(&bound), &len);
+    out_port = ntohs(bound.sin_port);
+    return s;
+}
+
+} // namespace
+
+bool AirPlayServer::start_audio_stream_locked(MirrorSource* src, uint64_t ct,
+                                              uint64_t spf) {
+    if (!src->has_aes_key || !src->has_aes_iv) {
+        std::cerr << "[AirPlay] Audio: no FairPlay key/IV yet, skipping audio stream\n";
+        return false;
+    }
+
+    // Orphan any previous stream — its thread sees the handle change on the
+    // next poll, then closes its own sockets and exits.
+    src->audio_sock = INVALID_SOCK;
+    src->audio_control_sock = INVALID_SOCK;
+
+    // ct: 4 = AAC-LC, 8 = AAC-ELD, 2 = ALAC.
+    if (ct != 4 && ct != 8) {
+        std::cerr << "[AirPlay] Audio: unsupported compression type " << ct << "\n";
+        return false;
+    }
+    const bool eld = (ct == 8);
+    const int sample_rate = 44100;
+    const int channels = 2;
+    auto asc = build_audio_specific_config(eld ? 39 : 2, sample_rate, channels,
+                                           spf != 512);
+
+    auto decoder = std::make_shared<media::Decoder>();
+    if (!decoder->init_audio(AV_CODEC_ID_AAC, sample_rate, channels,
+                             asc.data(), static_cast<int>(asc.size()))) {
+        std::cerr << "[AirPlay] Audio: failed to init AAC decoder\n";
+        return false;
+    }
+
+    const std::string src_id = src->id;
+    decoder->set_audio_callback([this, src_id](media::AudioFrame frame) {
+        bool fwd = false;
+        {
+            std::lock_guard lock(sources_mutex_);
+            fwd = (active_source_id_ == src_id);
+        }
+        if (fwd && on_audio_) on_audio_(std::move(frame));
+    });
+
+    uint16_t data_port = 0, ctrl_port = 0;
+    socket_t data_sock = bind_udp_ephemeral(data_port);
+    if (data_sock == INVALID_SOCK) {
+        std::cerr << "[AirPlay] Audio: failed to bind data socket\n";
+        return false;
+    }
+    socket_t ctrl_sock = bind_udp_ephemeral(ctrl_port);
+    if (ctrl_sock == INVALID_SOCK) {
+        closesocket(data_sock);
+        std::cerr << "[AirPlay] Audio: failed to bind control socket\n";
+        return false;
+    }
+
+    src->audio_sock = data_sock;
+    src->audio_control_sock = ctrl_sock;
+    src->audio_port = data_port;
+    src->audio_control_port = ctrl_port;
+
+    std::array<uint8_t, 16> key{}, iv{};
+    memcpy(key.data(), src->aes_key, 16);
+    memcpy(iv.data(), src->aes_iv, 16);
+
+    audio_threads_.fetch_add(1);
+    std::thread(&AirPlayServer::audio_receive_loop, this, src_id, data_sock,
+                ctrl_sock, decoder, key, iv).detach();
+
+    std::cout << "[AirPlay] Audio stream for " << src->name << ": "
+              << (eld ? "AAC-ELD" : "AAC-LC") << " " << sample_rate << "Hz/"
+              << channels << "ch on ports " << data_port << " (data) / "
+              << ctrl_port << " (control)\n";
+    return true;
+}
+
+void AirPlayServer::audio_receive_loop(std::string source_ip, socket_t data_sock,
+                                       socket_t control_sock,
+                                       std::shared_ptr<media::Decoder> decoder,
+                                       std::array<uint8_t, 16> key,
+                                       std::array<uint8_t, 16> iv) {
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (ctx) {
+        EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), nullptr, key.data(), iv.data());
+        EVP_CIPHER_CTX_set_padding(ctx, 0);
+    }
+
+    static constexpr uint8_t kNoDataMarker[] = {0x00, 0x68, 0x34, 0x00};
+    std::vector<uint8_t> packet(32768);
+    std::vector<uint8_t> plain(32768);
+    std::deque<uint32_t> recent_timestamps;
+    std::set<uint32_t> recent_timestamp_set;
+    int64_t packets = 0;
+    int64_t decoded = 0;
+    int64_t decode_failures = 0;
+    int64_t duplicates = 0;
+
+    while (ctx && running_.load()) {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(data_sock, &fds);
+        FD_SET(control_sock, &fds);
+        socket_t maxfd = (data_sock > control_sock) ? data_sock : control_sock;
+        timeval tv{0, 200000};
+        int sel = select(static_cast<int>(maxfd) + 1, &fds, nullptr, nullptr, &tv);
+
+        // Source torn down, or replaced by a newer SETUP — give up our slot.
+        {
+            std::lock_guard lock(sources_mutex_);
+            auto it = sources_.find(source_ip);
+            if (it == sources_.end() || it->second->audio_sock != data_sock) break;
+        }
+        if (sel <= 0) continue;
+
+        if (FD_ISSET(control_sock, &fds)) {
+            // Retransmit/sync channel: we never request resends, just drain it.
+            recvfrom(control_sock, reinterpret_cast<char*>(packet.data()),
+                     static_cast<int>(packet.size()), 0, nullptr, nullptr);
+        }
+        if (!FD_ISSET(data_sock, &fds)) continue;
+
+        int n = recvfrom(data_sock, reinterpret_cast<char*>(packet.data()),
+                         static_cast<int>(packet.size()), 0, nullptr, nullptr);
+        if (n < 12) continue;
+
+        // RTP payload type 96 is the AAC audio stream. Resend packets arrive
+        // on the control socket and are intentionally handled separately.
+        const uint8_t pt = packet[1] & 0x7F;
+        if (pt != 96) continue;
+        constexpr int offset = 12;
+        if (n <= offset) continue;
+
+        const int payload_len = n - offset;
+        if (payload_len == 4 &&
+            memcmp(packet.data() + offset, kNoDataMarker, sizeof(kNoDataMarker)) == 0) {
+            continue;
+        }
+        const int enc_len = (payload_len / 16) * 16;
+
+        // CBC restarts from the session IV on every packet; the trailing
+        // sub-block remainder is sent in the clear.
+        EVP_DecryptInit_ex(ctx, nullptr, nullptr, nullptr, iv.data());
+        int outl = 0;
+        if (enc_len > 0)
+            EVP_DecryptUpdate(ctx, plain.data(), &outl, packet.data() + offset, enc_len);
+        if (payload_len > enc_len)
+            memcpy(plain.data() + enc_len, packet.data() + offset + enc_len,
+                   static_cast<size_t>(payload_len - enc_len));
+
+        const uint32_t rtp_timestamp =
+            (static_cast<uint32_t>(packet[4]) << 24) |
+            (static_cast<uint32_t>(packet[5]) << 16) |
+            (static_cast<uint32_t>(packet[6]) << 8) |
+            static_cast<uint32_t>(packet[7]);
+        packets++;
+
+        // AirPlay AAC-ELD repeats each encoded frame on the wire. The RTP
+        // sequence number belongs to each transmission, while the timestamp
+        // identifies the encoded audio frame itself.
+        if (recent_timestamp_set.find(rtp_timestamp) != recent_timestamp_set.end()) {
+            duplicates++;
+            continue;
+        }
+        recent_timestamp_set.insert(rtp_timestamp);
+        recent_timestamps.push_back(rtp_timestamp);
+        if (recent_timestamps.size() > 128) {
+            recent_timestamp_set.erase(recent_timestamps.front());
+            recent_timestamps.pop_front();
+        }
+
+        if (decoder->decode_audio(plain.data(), static_cast<size_t>(payload_len),
+                                  rtp_timestamp)) {
+            decoded++;
+        } else {
+            decode_failures++;
+        }
+        if (packets == 1 || packets % 500 == 0) {
+            std::cout << "[AirPlay] Audio RTP: packets=" << packets
+                      << " decoded=" << decoded
+                      << " decode_failures=" << decode_failures
+                      << " duplicates=" << duplicates << "\n";
+        }
+    }
+
+    if (ctx) EVP_CIPHER_CTX_free(ctx);
+    closesocket(data_sock);
+    closesocket(control_sock);
+    std::cout << "[AirPlay] Audio stream ended for " << source_ip
+              << " (" << packets << " packets, " << decoded << " decoded, "
+              << duplicates << " duplicates)\n";
+    audio_threads_.fetch_sub(1);
+}
+
 // --- Mirror Data Receiver ---
+
 
 void AirPlayServer::mirror_receive_loop() {
     // AirPlay mirror stream protocol:

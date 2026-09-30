@@ -21,6 +21,10 @@ public:
     struct StreamInfo {
         uint64_t type = 0;
         uint64_t stream_connection_id = 0;
+        // Audio stream (type 96) parameters.
+        uint64_t ct = 0;           // compression type: 1=PCM 2=ALAC 4=AAC-LC 8=AAC-ELD
+        uint64_t spf = 0;          // samples per frame
+        uint64_t audio_format = 0; // Apple audio format bitmask
     };
     bool get_streams(std::vector<StreamInfo>& out) const;
 

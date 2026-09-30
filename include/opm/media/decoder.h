@@ -10,6 +10,7 @@ struct AVCodecContext;
 struct AVFrame;
 struct AVPacket;
 struct SwsContext;
+struct SwrContext;
 
 namespace opm::media {
 
@@ -48,7 +49,11 @@ public:
 
     // Initialize video decoder for H.264 or H.265
     bool init_video(int codec_id); // AV_CODEC_ID_H264 or AV_CODEC_ID_H265
-    bool init_audio(int codec_id, int sample_rate, int channels);
+    // extradata carries the raw AudioSpecificConfig for AAC-LC / AAC-ELD,
+    // which FFmpeg needs up front because AirPlay sends bare AAC frames
+    // with no in-band ADTS header.
+    bool init_audio(int codec_id, int sample_rate, int channels,
+                    const uint8_t* extradata = nullptr, int extradata_size = 0);
 
     // Feed encoded data, decoded frames are dispatched via callbacks
     bool decode_video(const uint8_t* data, size_t size, int64_t pts);
@@ -66,6 +71,10 @@ private:
     AVCodecContext* video_ctx_ = nullptr;
     AVCodecContext* audio_ctx_ = nullptr;
     SwsContext* sws_ctx_ = nullptr;
+    SwrContext* swr_ctx_ = nullptr;
+    int swr_src_fmt_ = -1;
+    int swr_src_rate_ = 0;
+    int swr_src_channels_ = 0;
 
     OnVideoFrame on_video_frame_;
     OnAudioFrame on_audio_frame_;
